@@ -3,7 +3,7 @@
 import json
 import re
 import os
-from openai import OpenAI
+from openai import OpenAI, APIError # Import APIError for specific handling
 from pathlib import Path
 import hashlib # For cache key generation
 import time # For potential corrupted cache backup naming
@@ -15,6 +15,19 @@ CACHE_DIR = APP_DIR / "cache"
 
 # Context management (global list)
 context_messages = []
+
+# --- Logging Helper ---
+def format_message_for_log(message):
+    """Formats a message dictionary for concise logging."""
+    role = message.get('role', 'unknown')
+    content = message.get('content', '')
+    # Truncate long content for logs
+    content_display = (content[:75] + '...') if len(content) > 78 else content
+    # Replace newlines in the snippet for cleaner single-line logging
+    content_display = content_display.replace('\n', '\\n')
+    return f"[{role}] '{content_display}'"
+
+# --- Cache and Context Functions (Mostly unchanged, added logging to add_context_message) ---
 
 def _ensure_cache_dir():
     """Make sure the cache directory exists"""
@@ -105,9 +118,16 @@ def add_context_message(message, context_limit):
     # Maintain pairs (user + assistant). Trim oldest pairs if limit exceeded.
     # Example: limit=2 means keep last 2 user and 2 assistant messages (4 total)
     max_messages = limit * 2
-    if len(context_messages) > max_messages:
+    current_length = len(context_messages)
+
+    if current_length > max_messages:
         context_messages = context_messages[-max_messages:]
-        print(f"Context trimmed to last {len(context_messages)} messages (limit: {limit} exchanges).")
+        new_length = len(context_messages)
+        # Log the trimming action
+        print(f"[CONTEXT] History limit ({max_messages} msgs / {limit} exchanges) exceeded ({current_length} msgs). Trimmed to {new_length}.")
+    # else:
+    # Optional: Log when context is added but not trimmed
+    # print(f"[CONTEXT] Added message. History length: {current_length}/{max_messages}")
 
 
 def clear_current_game_cache(hwnd):
@@ -227,13 +247,13 @@ def parse_translation_output(response_text, original_tag_mapping):
                     print(f"Warning: Received segment number '{segment_number}' (line match) which was not in original mapping.")
         if not found_line_match:
             # If still no matches, the format is likely wrong
-            print("[LOG] Failed to parse any <|n|> segments from response:")
-            print(f"Raw Response: '{response_text}'")
+            print("[LLM PARSE] Failed to parse any <|n|> segments from response.")
+            # print(f"Raw Response: '{response_text}'") # Logged elsewhere now
             # Attempt a very basic extraction if response is just plain text (single segment case?)
             if not response_text.startswith("<|") and len(original_tag_mapping) == 1:
                 first_tag = next(iter(original_tag_mapping))
                 first_roi = original_tag_mapping[first_tag]
-                print(f"Warning: Response had no tags, assuming plain text response for single ROI '{first_roi}'.")
+                print(f"[LLM PARSE] Warning: Response had no tags, assuming plain text response for single ROI '{first_roi}'.")
                 parsed_segments[first_roi] = response_text.strip()
             else:
                 # Only return error if it's not a single segment plain text response
@@ -243,7 +263,7 @@ def parse_translation_output(response_text, original_tag_mapping):
     # Check if all original tags were translated
     missing_tags = set(original_tag_mapping.values()) - set(parsed_segments.keys())
     if missing_tags:
-        print(f"Warning: Translation response missing segments for ROIs: {', '.join(missing_tags)}")
+        print(f"[LLM PARSE] Warning: Translation response missing segments for ROIs: {', '.join(missing_tags)}")
         # Add placeholders for missing ones
         for roi_name in missing_tags:
             parsed_segments[roi_name] = "[Translation Missing]"
@@ -328,18 +348,20 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
     if not force_recache:
         cached_result = get_cached_translation(cache_key, cache_file_path)
         if cached_result:
-            print(f"[LOG] Using cached translation for key: {cache_key[:10]}... from {cache_file_path.name}")
+            print(f"[CACHE] HIT for key: {cache_key[:10]}... in {cache_file_path.name}")
             # Ensure cache returns the expected format (roi_name -> translation)
             if isinstance(cached_result, dict) and not 'error' in cached_result:
                 # Quick check: does cached result contain keys for current request?
                 if all(roi_name in cached_result for roi_name in tag_mapping.values()):
                     return cached_result
                 else:
-                    print("[LOG] Cached result seems incomplete for current request, fetching fresh translation.")
+                    print("[CACHE] WARN: Cached result seems incomplete for current request, fetching fresh translation.")
             else:
-                print("[LOG] Cached result format mismatch or error, fetching fresh translation.")
-    else:
-        print(f"[LOG] Force recache requested for key: {cache_key[:10]}...")
+                print("[CACHE] WARN: Cached result format mismatch or error, fetching fresh translation.")
+    elif force_recache:
+        print(f"[CACHE] SKIP requested for key: {cache_key[:10]}...")
+    else: # Cache miss
+        print(f"[CACHE] MISS for key: {cache_key[:10]}... in {cache_file_path.name}")
 
 
     # 3. Prepare messages for API
@@ -358,9 +380,12 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
 
     # Add context history (if any)
     global context_messages
+    context_to_send = []
     if context_messages:
-        messages.extend(context_messages)
-        print(f"[LOG] Including {len(context_messages)} messages from context history.")
+        # Make a copy to avoid modifying the global list during iteration/logging
+        context_to_send = list(context_messages)
+        messages.extend(context_to_send)
+        # print(f"[CONTEXT] Including {len(context_to_send)} messages from context history.") # Logged below now
 
 
     # Current User Request
@@ -382,7 +407,7 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
     if not preset.get("model") or not preset.get("api_url"):
         missing = [f for f in ["model", "api_url"] if not preset.get(f)]
         errmsg = f"Missing required preset fields: {', '.join(missing)}"
-        print(f"[LOG] {errmsg}")
+        print(f"[API] Error: {errmsg}")
         return {"error": errmsg}
 
     payload = {
@@ -400,35 +425,66 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
                 print(f"Warning: Invalid value for parameter '{param}': {preset[param]}. Skipping.")
 
 
-    print("[LOG] Sending translation request...")
-    # print(json.dumps(payload, indent=2, ensure_ascii=False)) # Might reveal API keys if preset has them
+    # --- LLM Request Logging ---
+    print("-" * 20 + " LLM Request " + "-" * 20)
+    print(f"[API] Endpoint: {preset.get('api_url')}")
+    print(f"[API] Model: {preset['model']}")
+    print(f"[API] Payload Parameters (excluding messages):")
+    for key, value in payload.items():
+        if key != "messages":
+            print(f"  - {key}: {value}")
+    print(f"[API] Messages ({len(messages)} total):")
+    # Log system prompt presence without full content potentially
+    if messages[0]['role'] == 'system':
+        print(f"  - [system] (System prompt configured)")
+    # Log context messages (if any)
+    if context_to_send:
+        print(f"  - [CONTEXT HISTORY - {len(context_to_send)} messages]:")
+        for msg in context_to_send:
+            print(f"    - {format_message_for_log(msg)}")
+    # Log the current user message
+    print(f"  - {format_message_for_log(current_user_message)}")
+    print("-" * 55)
+    # --- End LLM Request Logging ---
+
 
     # 5. Initialize API Client
     try:
         # Ensure API key is handled correctly (might be None or empty string)
+        # DO NOT LOG THE API KEY
         api_key = preset.get("api_key") or None # Treat empty string as None for client
         client = OpenAI(
             base_url=preset.get("api_url"),
             api_key=api_key
         )
     except Exception as e:
-        print(f"[LOG] Error creating API client: {e}")
+        print(f"[API] Error creating API client: {e}")
         return {"error": f"Error creating API client: {e}"}
 
     # 6. Make API Request
+    response_text = None
     try:
         completion = client.chat.completions.create(**payload)
         # Check for valid response structure
         if not completion.choices or not completion.choices[0].message or completion.choices[0].message.content is None:
-            print("[LOG] Invalid response structure received from API.")
-            print(f"API Response: {completion}")
+            print("[API] Error: Invalid response structure received from API.")
+            # Log the raw completion object for debugging
+            try:
+                print(f"[API] Raw Response Object: {completion}")
+            except Exception as log_err:
+                print(f"[API] Error logging raw response object: {log_err}")
             return {"error": "Invalid response structure received from API."}
 
         response_text = completion.choices[0].message.content.strip()
-        print(f"[LOG] Raw LLM response received ({len(response_text)} chars).")
-        # print(f"[LOG] Raw response snippet: '{response_text[:100]}...'")
-    except Exception as e:
-        # Try to get more info from the exception if it's an APIError
+
+        # --- LLM Response Logging ---
+        print("-" * 20 + " LLM Response " + "-" * 20)
+        print(f"[API] Raw Response Text ({len(response_text)} chars):")
+        print(response_text)
+        print("-" * 56)
+        # --- End LLM Response Logging ---
+
+    except APIError as e: # Catch specific OpenAI errors first
         error_message = str(e)
         status_code = getattr(e, 'status_code', 'N/A')
         try:
@@ -438,9 +494,18 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
             if detail: error_message = detail
         except:
             pass # Ignore parsing errors
-        log_msg = f"[LOG] API error during translation request: Status {status_code}, Error: {error_message}"
+        log_msg = f"[API] APIError during translation request: Status {status_code}, Error: {error_message}"
         print(log_msg)
+        # Log request details that might have caused it (e.g., model name)
+        print(f"[API] Request Model: {payload.get('model')}")
         return {"error": f"API Error ({status_code}): {error_message}"}
+    except Exception as e: # Catch other potential errors (network, etc.)
+        error_message = str(e)
+        log_msg = f"[API] Error during translation request: {error_message}"
+        print(log_msg)
+        import traceback
+        traceback.print_exc() # Print full traceback for unexpected errors
+        return {"error": f"Error during API request: {error_message}"}
 
 
     # 7. Parse LLM Response
@@ -449,20 +514,21 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
 
     # Check if parsing resulted in an error
     if 'error' in final_translations:
-        print("[LOG] Parsing failed after receiving response.")
-        return final_translations # Return the error dictionary
+        print("[LLM PARSE] Parsing failed after receiving response.")
+        # Error message already contains details and raw response
+        return final_translations
 
     # 8. Update Context and Cache
     # Add the successful exchange to context
     current_assistant_message = {"role": "assistant", "content": response_text}
-    # Add user message first, then assistant response
+    # Add user message first, then assistant response (calls add_context_message which handles trimming)
     add_context_message(current_user_message, context_limit)
     add_context_message(current_assistant_message, context_limit)
 
     # Add to cache using the key generated earlier and the game-specific file
     # This happens regardless of force_recache flag, overwriting previous entry
     set_cache_translation(cache_key, final_translations, cache_file_path)
-    print(f"[LOG] Translation cached/updated successfully in {cache_file_path.name}")
+    print(f"[CACHE] Translation cached/updated successfully in {cache_file_path.name}")
 
     return final_translations
 

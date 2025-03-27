@@ -6,10 +6,10 @@ import threading
 import copy
 from ui.base import BaseTab
 from utils.translation import translate_text, clear_all_cache, clear_current_game_cache, reset_context # Updated imports
-from utils.config import save_translation_presets, load_translation_presets
+from utils.config import save_translation_presets, load_translation_presets, _get_game_hash # Import _get_game_hash
 from utils.settings import get_setting, set_setting, update_settings # Import settings functions
 
-# Default presets configuration
+# Default presets configuration (remains the same)
 DEFAULT_PRESETS = {
     "OpenAI (GPT-3.5)": {
         "api_url": "https://api.openai.com/v1/chat/completions", # Corrected endpoint
@@ -106,7 +106,7 @@ class TranslationTab(BaseTab):
     def setup_ui(self):
         # --- Load relevant settings ---
         self.target_language = get_setting("target_language", "en")
-        self.additional_context = get_setting("additional_context", "")
+        # self.additional_context = get_setting("additional_context", "") # REMOVED - now game specific
         self.auto_translate_enabled = get_setting("auto_translate", False)
         last_preset_name = get_setting("last_preset_name")
 
@@ -175,22 +175,27 @@ class TranslationTab(BaseTab):
         self.target_lang_entry.bind("<FocusOut>", self.save_basic_settings) # Save on leaving field
         self.target_lang_entry.bind("<Return>", self.save_basic_settings)   # Save on pressing Enter
 
-        # Additional context (Loads from general settings)
-        ttk.Label(self.basic_frame, text="Additional Context:", anchor=tk.NW).grid(row=1, column=0, sticky=tk.NW, padx=5, pady=5)
+        # Additional context (Now game-specific, loaded dynamically)
+        ttk.Label(self.basic_frame, text="Additional Context (Game Specific):", anchor=tk.NW).grid(row=1, column=0, sticky=tk.NW, padx=5, pady=5)
         self.additional_context_text = tk.Text(self.basic_frame, width=40, height=5, wrap=tk.WORD)
         self.additional_context_text.grid(row=1, column=1, sticky=tk.NSEW, padx=5, pady=5) # Expand fully
         scroll_ctx = ttk.Scrollbar(self.basic_frame, command=self.additional_context_text.yview)
         scroll_ctx.grid(row=1, column=2, sticky=tk.NS, pady=5)
         self.additional_context_text.config(yscrollcommand=scroll_ctx.set)
-        self.additional_context_text.insert("1.0", self.additional_context)
-        self.additional_context_text.bind("<FocusOut>", self.save_basic_settings) # Save on leaving field
+        # self.additional_context_text.insert("1.0", self.additional_context) # REMOVED - loaded by app
+        # Bind to game-specific save function
+        self.additional_context_text.bind("<FocusOut>", self.save_context_for_current_game)
+        # Use Shift+Return to insert newline, regular Return to save
+        self.additional_context_text.bind("<Return>", self.save_context_for_current_game)
+        self.additional_context_text.bind("<Shift-Return>", lambda e: self.additional_context_text.insert(tk.INSERT, '\n'))
+
 
         # Make context column expandable
         self.basic_frame.columnconfigure(1, weight=1)
         self.basic_frame.rowconfigure(1, weight=1) # Allow context text to expand vertically
 
 
-        # === Preset Settings Tab ===
+        # === Preset Settings Tab === (No changes needed here)
         self.preset_settings_frame = ttk.Frame(self.settings_notebook, padding=10)
         self.settings_notebook.add(self.preset_settings_frame, text="Preset Details") # Renamed tab
 
@@ -275,9 +280,16 @@ class TranslationTab(BaseTab):
         self.reset_context_btn = ttk.Button(cache_context_frame, text="Reset Translation Context", command=self.reset_translation_context)
         self.reset_context_btn.pack(side=tk.TOP, padx=5, pady=(5,2), anchor=tk.W) # Add some top padding
 
-        # --- Translate Button ---
-        self.translate_btn = ttk.Button(action_frame, text="Translate Stable Text Now", command=self.perform_translation)
-        self.translate_btn.pack(side=tk.RIGHT, padx=5, pady=5) # Add padding
+        # --- Translate Buttons (Grouped) ---
+        translate_btn_frame = ttk.Frame(action_frame)
+        translate_btn_frame.pack(side=tk.RIGHT, padx=5, pady=5)
+
+        self.translate_btn = ttk.Button(translate_btn_frame, text="Translate", command=self.perform_translation)
+        self.translate_btn.pack(side=tk.LEFT, padx=(0, 2)) # Normal translate
+
+        self.force_translate_btn = ttk.Button(translate_btn_frame, text="Force Retranslate", command=self.perform_force_translation)
+        self.force_translate_btn.pack(side=tk.LEFT, padx=(2, 0)) # Force retranslate
+
 
         # === Auto Translation Option (Loads from general settings) ===
         auto_frame = ttk.Frame(self.settings_frame)
@@ -304,31 +316,92 @@ class TranslationTab(BaseTab):
         self.translation_display.config(yscrollcommand=scrollbar.set)
         self.translation_display.config(state=tk.DISABLED)
 
-    def save_basic_settings(self, event=None):
-        """Save non-preset settings like target language and additional context."""
-        new_target_lang = self.target_lang_entry.get().strip()
-        new_additional_context = self.additional_context_text.get("1.0", tk.END).strip()
+    def load_context_for_game(self, context_text):
+        """Loads the game-specific context into the text widget."""
+        try:
+            # Ensure widget exists before modifying
+            if not self.additional_context_text.winfo_exists():
+                return
+            self.additional_context_text.config(state=tk.NORMAL)
+            self.additional_context_text.delete("1.0", tk.END)
+            if context_text:
+                self.additional_context_text.insert("1.0", context_text)
+            # Keep state normal for editing
+            # self.additional_context_text.config(state=tk.DISABLED) # Keep editable
+        except tk.TclError:
+            print("Error updating context text widget (might be destroyed).")
+        except Exception as e:
+            print(f"Unexpected error loading context: {e}")
 
-        # Use update_settings for efficiency
+
+    def save_context_for_current_game(self, event=None):
+        """Save the content of the context text widget for the current game."""
+        # Prevent saving if Return was pressed without Shift
+        if event and event.keysym == 'Return' and not (event.state & 0x0001): # Check if Shift key is NOT pressed
+            # We want Shift+Return to insert newline, regular Return saves
+            pass # Proceed to save
+        elif event and event.keysym == 'Return':
+            return "break" # Prevent default Return behavior (newline insertion) if Shift is pressed
+
+        current_hwnd = self.app.selected_hwnd
+        if not current_hwnd:
+            # Don't save if no game is selected
+            # print("Cannot save context: No game selected.")
+            return
+
+        game_hash = _get_game_hash(current_hwnd)
+        if not game_hash:
+            print("Cannot save context: Could not get game hash.")
+            return
+
+        try:
+            # Ensure widget exists
+            if not self.additional_context_text.winfo_exists():
+                return
+
+            new_context = self.additional_context_text.get("1.0", tk.END).strip()
+
+            all_game_contexts = get_setting("game_specific_context", {})
+            # Only save if context actually changed
+            if all_game_contexts.get(game_hash) != new_context:
+                all_game_contexts[game_hash] = new_context
+                if update_settings({"game_specific_context": all_game_contexts}):
+                    print(f"Game-specific context saved for hash {game_hash[:8]}...")
+                    self.app.update_status("Game context saved.")
+                else:
+                    messagebox.showerror("Error", "Failed to save game-specific context.")
+            # else:
+            # print("Context unchanged, not saving.") # Optional debug message
+
+        except tk.TclError:
+            print("Error accessing context text widget (might be destroyed).")
+        except Exception as e:
+            print(f"Error saving game context: {e}")
+            messagebox.showerror("Error", f"Failed to save game context: {e}")
+
+        # Important for Return binding: prevent default newline insertion after saving
+        if event and event.keysym == 'Return':
+            return "break"
+
+
+    def save_basic_settings(self, event=None):
+        """Save non-preset, non-game-specific settings like target language."""
+        new_target_lang = self.target_lang_entry.get().strip()
+        # Context is now saved separately by save_context_for_current_game
+
         settings_to_update = {}
         changed = False
         if new_target_lang != self.target_language:
             settings_to_update["target_language"] = new_target_lang
             self.target_language = new_target_lang
             changed = True
-        if new_additional_context != self.additional_context:
-            settings_to_update["additional_context"] = new_additional_context
-            self.additional_context = new_additional_context
-            changed = True
 
         if changed and settings_to_update:
             if update_settings(settings_to_update):
-                print("General translation settings (lang/context) updated.")
-                self.app.update_status("Target language/context saved.")
+                print("General translation settings (language) updated.")
+                self.app.update_status("Target language saved.")
             else:
-                messagebox.showerror("Error", "Failed to save general translation settings.")
-        elif changed: # Should not happen if settings_to_update is empty but check anyway
-            print("Logic error: Changed flag set but no settings to update.")
+                messagebox.showerror("Error", "Failed to save target language setting.")
 
 
     def toggle_auto_translate(self):
@@ -350,7 +423,7 @@ class TranslationTab(BaseTab):
         return self.auto_translate_var.get() # Use the variable directly
 
     def get_translation_config(self):
-        """Get the current translation preset AND general settings."""
+        """Get the current translation preset AND general settings (including current game context)."""
         preset_name = self.preset_combo.get()
         if not preset_name or preset_name not in self.translation_presets:
             messagebox.showerror("Error", "No valid translation preset selected.", parent=self.app.master)
@@ -363,7 +436,6 @@ class TranslationTab(BaseTab):
             return None
 
         # --- Crucially, get API key from the UI entry, not the saved preset ---
-        # This allows users to enter keys without saving them permanently in the preset file
         api_key_from_ui = self.api_key_entry.get().strip()
 
         # --- Get other preset values from UI (allowing unsaved changes for translation) ---
@@ -383,18 +455,25 @@ class TranslationTab(BaseTab):
         except ValueError as e:
             messagebox.showerror("Error", f"Invalid number format in Preset Details: {e}", parent=self.app.master)
             return None
+        except tk.TclError: # Handle case where UI elements might be destroyed
+            messagebox.showerror("Error", "UI elements missing. Cannot read preset details.", parent=self.app.master)
+            return None
 
 
         # --- Get general settings from UI / saved state ---
         target_lang = self.target_lang_entry.get().strip()
-        additional_ctx = self.additional_context_text.get("1.0", tk.END).strip()
+        # --- Get current context directly from the text widget ---
+        try:
+            additional_ctx = self.additional_context_text.get("1.0", tk.END).strip()
+        except tk.TclError:
+            additional_ctx = "" # Handle case where widget might be destroyed
 
         # --- Combine into a working configuration ---
         # Use the preset settings currently displayed in the UI
         working_config = preset_config_from_ui
         # Add the non-preset settings
         working_config["target_language"] = target_lang
-        working_config["additional_context"] = additional_ctx
+        working_config["additional_context"] = additional_ctx # Use current value from widget
 
         # Validate required fields (URL and Model primarily)
         # API Key validity checked by API call itself
@@ -419,43 +498,46 @@ class TranslationTab(BaseTab):
         preset = self.translation_presets[preset_name]
         print(f"Loading preset '{preset_name}' into UI.")
 
-        # --- Load preset values into UI ---
-        # Preserve API Key if user has entered one, otherwise load from preset
-        current_api_key = self.api_key_entry.get().strip()
-        preset_api_key = preset.get("api_key", "")
-        self.api_key_entry.delete(0, tk.END)
-        self.api_key_entry.insert(0, current_api_key if current_api_key else preset_api_key)
+        try:
+            # --- Load preset values into UI ---
+            # Preserve API Key if user has entered one, otherwise load from preset
+            current_api_key = self.api_key_entry.get().strip()
+            preset_api_key = preset.get("api_key", "")
+            self.api_key_entry.delete(0, tk.END)
+            self.api_key_entry.insert(0, current_api_key if current_api_key else preset_api_key)
 
 
-        self.api_url_entry.delete(0, tk.END)
-        self.api_url_entry.insert(0, preset.get("api_url", ""))
+            self.api_url_entry.delete(0, tk.END)
+            self.api_url_entry.insert(0, preset.get("api_url", ""))
 
-        self.model_entry.delete(0, tk.END)
-        self.model_entry.insert(0, preset.get("model", ""))
+            self.model_entry.delete(0, tk.END)
+            self.model_entry.insert(0, preset.get("model", ""))
 
-        self.system_prompt_text.delete("1.0", tk.END)
-        self.system_prompt_text.insert("1.0", preset.get("system_prompt", ""))
+            self.system_prompt_text.delete("1.0", tk.END)
+            self.system_prompt_text.insert("1.0", preset.get("system_prompt", ""))
 
-        self.context_limit_entry.delete(0, tk.END)
-        self.context_limit_entry.insert(0, str(preset.get("context_limit", 10)))
+            self.context_limit_entry.delete(0, tk.END)
+            self.context_limit_entry.insert(0, str(preset.get("context_limit", 10)))
 
-        self.temperature_entry.delete(0, tk.END)
-        self.temperature_entry.insert(0, str(preset.get("temperature", 0.3)))
+            self.temperature_entry.delete(0, tk.END)
+            self.temperature_entry.insert(0, str(preset.get("temperature", 0.3)))
 
-        self.top_p_entry.delete(0, tk.END)
-        self.top_p_entry.insert(0, str(preset.get("top_p", 1.0)))
+            self.top_p_entry.delete(0, tk.END)
+            self.top_p_entry.insert(0, str(preset.get("top_p", 1.0)))
 
-        self.frequency_penalty_entry.delete(0, tk.END)
-        self.frequency_penalty_entry.insert(0, str(preset.get("frequency_penalty", 0.0)))
+            self.frequency_penalty_entry.delete(0, tk.END)
+            self.frequency_penalty_entry.insert(0, str(preset.get("frequency_penalty", 0.0)))
 
-        self.presence_penalty_entry.delete(0, tk.END)
-        self.presence_penalty_entry.insert(0, str(preset.get("presence_penalty", 0.0)))
+            self.presence_penalty_entry.delete(0, tk.END)
+            self.presence_penalty_entry.insert(0, str(preset.get("presence_penalty", 0.0)))
 
-        self.max_tokens_entry.delete(0, tk.END)
-        self.max_tokens_entry.insert(0, str(preset.get("max_tokens", 1000)))
+            self.max_tokens_entry.delete(0, tk.END)
+            self.max_tokens_entry.insert(0, str(preset.get("max_tokens", 1000)))
 
-        # --- Save the name of the selected preset ---
-        set_setting("last_preset_name", preset_name)
+            # --- Save the name of the selected preset ---
+            set_setting("last_preset_name", preset_name)
+        except tk.TclError:
+            print("Error updating preset UI elements (might be destroyed).")
 
 
     def get_current_preset_values_for_saving(self):
@@ -481,6 +563,9 @@ class TranslationTab(BaseTab):
             return preset_data
         except ValueError as e:
             messagebox.showerror("Error", f"Invalid number format in Preset Details: {e}", parent=self.app.master)
+            return None
+        except tk.TclError:
+            messagebox.showerror("Error", "UI elements missing. Cannot read preset details.", parent=self.app.master)
             return None
         except Exception as e:
             messagebox.showerror("Error", f"Could not read preset settings: {e}", parent=self.app.master)
@@ -587,106 +672,80 @@ class TranslationTab(BaseTab):
                 messagebox.showerror("Error", "Failed to save presets after deletion. The preset was not deleted.", parent=self.app.master)
 
 
-    def perform_translation(self):
-        """Translate the stable text using the current settings."""
-        # Get combined config (preset + general settings like lang, context)
+    def _start_translation_thread(self, force_recache=False):
+        """Internal helper to start the translation thread."""
         config = self.get_translation_config()
         if config is None:
             print("Translation cancelled due to configuration error.")
             self.app.update_status("Translation cancelled: Configuration error.")
-            return # Error message already shown
+            return
 
-        # --- Get the HWND for game-specific caching ---
         current_hwnd = self.app.selected_hwnd
         if not current_hwnd:
-            messagebox.showwarning("Warning", "No game window selected. Cannot determine game for caching.", parent=self.app.master)
+            messagebox.showwarning("Warning", "No game window selected. Cannot translate.", parent=self.app.master)
             self.app.update_status("Translation cancelled: No window selected.")
             return
 
-        # Get text to translate (only non-empty stable texts)
         texts_to_translate = {name: text for name, text in self.app.stable_texts.items() if text and text.strip()}
-
         if not texts_to_translate:
             print("No stable text available to translate.")
             self.app.update_status("No stable text to translate.")
-            # Clear previous translation display
             self.translation_display.config(state=tk.NORMAL)
             self.translation_display.delete(1.0, tk.END)
             self.translation_display.insert(tk.END, "[No stable text detected]")
             self.translation_display.config(state=tk.DISABLED)
-            # Clear overlays
             if hasattr(self.app, 'overlay_manager'):
                 self.app.overlay_manager.clear_all_overlays()
             return
 
-        # Format text for the API (using original ROI names as keys for now)
-        # utils.translation.preprocess_text_for_translation handles the <|n|> conversion
         aggregated_input_text = "\n".join([f"[{name}]: {text}" for name, text in texts_to_translate.items()])
 
-        self.app.update_status("Translating...")
-        # Show translating message in preview
+        status_msg = "Translating..." if not force_recache else "Forcing retranslation..."
+        self.app.update_status(status_msg)
         self.translation_display.config(state=tk.NORMAL)
         self.translation_display.delete(1.0, tk.END)
-        self.translation_display.insert(tk.END, "Translating...\n")
+        self.translation_display.insert(tk.END, f"{status_msg}\n")
         self.translation_display.config(state=tk.DISABLED)
 
-        # Show translating message in overlays
         if hasattr(self.app, 'overlay_manager'):
             for roi_name in texts_to_translate:
-                self.app.overlay_manager.update_overlay(roi_name, "...") # Indicate loading
+                self.app.overlay_manager.update_overlay(roi_name, "...")
 
-
-        # --- Perform translation in a separate thread ---
         def translation_thread():
             try:
-                # Call the translation utility function
-                # It handles caching, context, API call, and parsing <|n|> output
-                # It now returns a dictionary mapping the original ROI name to the translation
                 translated_segments = translate_text(
-                    aggregated_input_text=aggregated_input_text, # Text with "[ROI_Name]: content" format
-                    hwnd=current_hwnd, # Pass HWND for caching
-                    preset=config, # Pass the combined config from get_translation_config
+                    aggregated_input_text=aggregated_input_text,
+                    hwnd=current_hwnd,
+                    preset=config,
                     target_language=config["target_language"],
                     additional_context=config["additional_context"],
-                    context_limit=config.get("context_limit", 10) # Pass context limit
+                    context_limit=config.get("context_limit", 10),
+                    force_recache=force_recache # Pass the flag
                 )
 
-                # --- Process results ---
                 if "error" in translated_segments:
                     error_msg = translated_segments["error"]
                     print(f"Translation API Error: {error_msg}")
-                    # Display error in preview (via main thread)
                     self.app.master.after_idle(lambda: self.update_translation_display_error(error_msg))
-                    # Display error in one overlay? Or clear them?
                     if hasattr(self.app, 'overlay_manager'):
                         first_roi = next(iter(texts_to_translate), None)
                         if first_roi:
                             self.app.master.after_idle(lambda name=first_roi: self.app.overlay_manager.update_overlay(name, f"Error!"))
-                            # Clear others maybe?
                             for r_name in texts_to_translate:
                                 if r_name != first_roi:
                                     self.app.master.after_idle(lambda n=r_name: self.app.overlay_manager.update_overlay(n, ""))
-
-
                 else:
                     print("Translation successful.")
-                    # Prepare display text for the preview box
                     preview_lines = []
-                    # Use app's ROI order for display consistency
                     for roi in self.app.rois:
                         roi_name = roi.name
-                        original_text = self.app.stable_texts.get(roi_name, "") # Check original stable text
-                        translated_text = translated_segments.get(roi_name) # Use ROI name as key
-
-                        # Only show lines for ROIs that had text AND received a translation
-                        if original_text.strip(): # Was there input for this ROI?
+                        original_text = self.app.stable_texts.get(roi_name, "")
+                        translated_text = translated_segments.get(roi_name)
+                        if original_text.strip():
                             preview_lines.append(f"[{roi_name}]:")
                             preview_lines.append(translated_text if translated_text else "[Translation N/A]")
-                            preview_lines.append("") # Add blank line
-
-                    preview_text = "\n".join(preview_lines).strip() # Remove trailing newline
-
-                    # Update UI (Preview and Overlays) from the main thread
+                            preview_lines.append("")
+                    preview_text = "\n".join(preview_lines).strip()
                     self.app.master.after_idle(lambda seg=translated_segments, prev=preview_text: self.update_translation_results(seg, prev))
 
             except Exception as e:
@@ -695,21 +754,32 @@ class TranslationTab(BaseTab):
                 import traceback
                 traceback.print_exc()
                 self.app.master.after_idle(lambda: self.update_translation_display_error(error_msg))
-                # Clear overlays on unexpected error
                 if hasattr(self.app, 'overlay_manager'):
                     self.app.master.after_idle(self.app.overlay_manager.clear_all_overlays)
 
-
         threading.Thread(target=translation_thread, daemon=True).start()
+
+
+    def perform_translation(self):
+        """Translate the stable text using the current settings (uses cache)."""
+        self._start_translation_thread(force_recache=False)
+
+    def perform_force_translation(self):
+        """Force re-translation of the stable text, skipping cache check but updating cache."""
+        self._start_translation_thread(force_recache=True)
+
 
     def update_translation_results(self, translated_segments, preview_text):
         """Update the preview display and overlays with translation results. Runs in main thread."""
         self.app.update_status("Translation complete.")
         # Update preview text box
-        self.translation_display.config(state=tk.NORMAL)
-        self.translation_display.delete(1.0, tk.END)
-        self.translation_display.insert(tk.END, preview_text if preview_text else "[No translation received]")
-        self.translation_display.config(state=tk.DISABLED)
+        try:
+            if self.translation_display.winfo_exists():
+                self.translation_display.config(state=tk.NORMAL)
+                self.translation_display.delete(1.0, tk.END)
+                self.translation_display.insert(tk.END, preview_text if preview_text else "[No translation received]")
+                self.translation_display.config(state=tk.DISABLED)
+        except tk.TclError: pass # Ignore if destroyed
 
         # Update overlays
         if hasattr(self.app, 'overlay_manager'):
@@ -723,10 +793,13 @@ class TranslationTab(BaseTab):
     def update_translation_display_error(self, error_message):
         """Update the preview display with an error message. Runs in main thread."""
         self.app.update_status(f"Translation Error: {error_message[:50]}...") # Show snippet in status
-        self.translation_display.config(state=tk.NORMAL)
-        self.translation_display.delete(1.0, tk.END)
-        self.translation_display.insert(tk.END, f"Translation Error:\n\n{error_message}")
-        self.translation_display.config(state=tk.DISABLED)
+        try:
+            if self.translation_display.winfo_exists():
+                self.translation_display.config(state=tk.NORMAL)
+                self.translation_display.delete(1.0, tk.END)
+                self.translation_display.insert(tk.END, f"Translation Error:\n\n{error_message}")
+                self.translation_display.config(state=tk.DISABLED)
+        except tk.TclError: pass # Ignore if destroyed
         self.last_translation_result = None # Clear last result on error
         self.last_translation_input = None
 

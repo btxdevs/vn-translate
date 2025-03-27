@@ -1,52 +1,142 @@
 {
-  "931865253dc73c731596ce90643bd231b2092102be4a3ac51bbdf297931bfbca": {
-    "char": "Ruri",
-    "dialogue": "[I'd be happy if you could purr like a cat in front of me as well."
+  "ea2ffa917665c46f22a1e0c9f539c7c9fc84fc74dcecc0d378e854d3aa1e22e4": {
+    "dialogue": "Because I hate Ruri's sister very much.",
+    "char": "Kisaki."
   },
-  "d340bbd0c7d8976d679f8560c00b33aab41e6ae2acec63fa39b72f5128d6d2fa": {
-    "char": "Ruri",
-    "dialogue": "[It was a happy and pleasant everyday life."
+  "4453bb2fbfb3f9a744d43cd7fd6892f02ba6c85a896d2aed1d16758188069df4": {
+    "dialogue": "She smiles coldly with a sidelong glance."
   },
-  "35a984d36f6dd9726a7e9709fac68321ba43b164f7a53877dac3ec2b3e58a7dc": {
-    "char": "Kisaki",
-    "dialogue": "[A decadent and unstimulating flow of time"
+  "194792355aa6b7efb8cb533bcfee14aa5e6825fb6bbf21d35a23e856ae9a3ffb": {
+    "dialogue": "Don't say it so happily.",
+    "char": "Ruri."
   },
-  "276dffaaf5652d0873c527fcb8d78e6a5dd443dfde9d8afa332adda792f6b508": {
-    "char": "Ruri",
-    "dialogue": "I... --You know, you..."
+  "9696ef3de0162425b2335ff3417ceb6952a1b1bad2cc1e707c43ef20360d7a9a": {
+    "dialogue": "Her words lacked conviction."
   },
-  "cb4bd66e88b071b04187ee33f209e24a2ffcc7749123838cad006385d8a35c10": {
-    "dialogue": "How dare you decide our everyday lives on your own."
+  "9f78a986cc2972e8242bb6d2a8e8847454c052729a2d3227de93ca704315cb1f": {
+    "dialogue": "Despite your masochistic tendencies,",
+    "char": "Kisaki."
   },
-  "9b16af05f7d2e1df9c5e76ccf99e936bd67a884d0b1abe6bf9fcb0e569c4a1a6": {
-    "char": "Kisaki",
-    "dialogue": "\"Even so, from now on your days will become very eventful."
+  "da7d6e20c1a62201111dd8b49681fdc0f6b35d4d7945940aef7e9047e33ab4f5": {
+    "dialogue": "The copyright of the Karorow country above"
   },
-  "2c5656f218a2adca66cb8e9f4d6200e4af050ab12577c72270d44a8a126d410c": {
-    "dialogue": "\"Even so, from now on your days will become very eventful."
+  "bab8424bba24465112c104fc103a7b12cb06695869a6a87127bb3a1746084dee": {
+    "dialogue": "A world where the scent of paper woven with reality and typography was felt.",
+    "char": "Yoruko"
   },
-  "2eb4b26f006d6a095edcef25e7fd1602896f046df813651f60c12a2035792e7a": {
-    "dialogue": "She raises her finger and lifts the corner of her lips in a coy smile."
+  "7ff6bd12daa7c62afbff5c2cf90185cdbc852aa9942f09be40e993704ce0008b": {
+    "char": "Yoruko"
   },
-  "eb89ec2c119ecfaabd6716843fd54682c08a5919b3fb45b011152ba2ab1caf75": {
-    "char": "Kisaki",
-    "dialogue": "\"From now on, let's lavish a lot of affection on Ruri. Let's torment him a lot.\""
+  "ed29e54510fbddf5ac58f248d85e69fe17961a20f916a3feba2f4c68b90d5e62": {
+    "char": "Yoruko",
+    "dialogue": "Fantasy, the truth that trembles and wavers at the boundary line"
   },
-  "c9587ca29a27f2cd886b7b2cf61e90c0affa0f12145b55b4fd5d04ed9057221e": {
-    "char": "Ruri",
-    "dialogue": "[That's just like you, as always."
+  "b104b516695b3f24a1ed8d0a5d2daf79a2e6c97a3b63360230aa7c82fc7f5565": {
+    "dialogue": "Surrounded by a small world, buried, sinking, yet entrusting one's body to the reality that has lost its boundary line"
   },
-  "93ee618c60ad2a2907328137fc45052b3e68e7d76bab905b39e558ef7ed16169": {
-    "dialogue": "Kisaki treats me without even considering me as her brother."
+  "94da38ed9d1adc94191799c818dd89b9208612069ad3f4d73d44317043b95719": {
+    "dialogue": "The white bird that chose to remain in the cage of its own will continues to refuse to spread its wings until it decays."
   },
-  "9d80df15f1d0bc9a77454b9f0fcda7aa08b0ccfa5535af48ca1e3b99a18ddcd6": {
-    "dialogue": "Kisaki treats me without even considering me as her brother. It's always been that way since long ago."
+  "63ebec546dbe15a1cfc3ee530c3fc66ec523784c247d6bddd5cd0d498f031e34": {
+    "dialogue": "There was no longing to soar through the vast sky."
   },
-  "668b5cf8e072f1158814ce8ebc54283b03983bec538f343b4fb71ceb59a8886b": {
-    "char": "Kisaki"
+  "948ef7cf2c7ee38ba257de59d851cd6684fc1274e4891a69f4ea874d80854ce6": {
+    "dialogue": "There was no longing to soar through the vast sky. The privilege of longing to fly belongs to those who cannot fly."
   },
-  "405ab0cc4c27f4af83f2257c3e34d13eb414174f72125a236512cf0e99ca5f25": {
-    "char": "Kisaki",
-    "dialogue": "\"Because I absolutely hate Ruri."
+  "87568f7e39cc7899d87a17eb6d4495e41d248733928dde3b8a7f31640eadccf1": {
+    "char": "Yoruko",
+    "dialogue": "H+!"
+  },
+  "9090883669ed9360c11fbdd50d6c7b30eccd104101cef640d61d1482abee9e7c": {
+    "char": "Yoruko",
+    "dialogue": "H+!",
+    "roi_1": "I wonder how many more books I'll be able to read from here on."
+  },
+  "cdf5be7627b993aa4132605c295abd8c026692f0179cc2a1e27428b8b1567717": {
+    "char": "Yoruko",
+    "dialogue": "[The majority of Tanaka Mako and Momoue's book returns are in the middle of the year.]"
+  },
+  "e44787c117cfdcf5727b9f354814b47006e87754a3b06489df27646c2c85e737": {
+    "dialogue": "All the stories that exist in this entire world"
+  },
+  "73eb9fac18cbd9eff2e9c5f2f501160f70ea37c49b53d6d4672cad1af82a17f5": {
+    "dialogue": "All the stories that exist in this entire world. Continuing to chew on and digest them was my entire life."
+  },
+  "88665fec05d04944a376c1abfb603c697e465e5adcaf753490d8316698f1a1d6": {
+    "dialogue": "However, without any other purpose or enjoyment, I simply turn the pages endlessly."
+  },
+  "c1b42ae02313af7165859bcf2fe8ba66281add2bd375d4ccdc09118254de43f9": {
+    "dialogue": "From the perspective of others, that way of living may have seemed strange. I understood that."
+  },
+  "808fed3f1212ea5ed6f5c171837e793d4a7030323e187623f78b2b328842a4d6": {
+    "char": "Yoruko",
+    "dialogue": "[It's as if, a candle of life"
+  },
+  "d108bdba82056189affaf17b4627fe07848dac96b63d2571ff60bd7fdb3ac910": {
+    "dialogue": "With each book I finish reading, I feel a sense of accomplishment."
+  },
+  "8399593abefb063157bee4efed6a42f09391ac1c19322ba0129642151c24bcc4": {
+    "dialogue": "With each book I finish reading, I feel a sense of accomplishment. As one story ends, my own life also draws closer to its end."
+  },
+  "bba7991c8e5dcf2b08c58160b449b4575577805d20a62c680a93990c1f0d6960": {
+    "dialogue": "For me, my lifespan was not measured in years or decades, but in the number of books left to read."
+  },
+  "055dc9749f2e1d6ca622abba9386be9f7a26bae8269552bd042e1517042164f7": {
+    "dialogue": "I wonder what will happen when I've finished reading all the books in this library."
+  },
+  "7dcb877fe5b517fb274cdeb0056dc2d0a21c8adf21ee156e4c1b8463f8f8c064": {
+    "char": "Yoruko",
+    "dialogue": "\"Even so"
+  },
+  "8175ee351e71a36b43d68a5abb737c2a35dcecfa4a3c3880dbf5486c9053bbbb": {
+    "dialogue": "I have no complaints about such a life."
+  },
+  "0a3a10329e9d15e92c517d2dcb39c1ed5dd6a8502d11a115feb575be7194ec7c": {
+    "dialogue": "I have no complaints about such a life. In fact, I even think it is a fulfilling one."
+  },
+  "4888cd6516b8bc0d2c58e6a2a20bb32c964892d2658140abe10eff5357aa7eb8": {
+    "dialogue": "The world confined within the pages of books seemed far more wonderful than the outside world."
+  },
+  "1a4caaa8029062f28a645b16232dc169b38a2bf2167e962140a6b54718448da7": {
+    "dialogue": "This is my kind and wonderful world."
+  },
+  "44367ab851e6797a1fe60670770ccefe71248814be650a3775877fbe7f067267": {
+    "dialogue": "This is my kind and wonderful world. The fantasy library nestled deep in the forest shows me sweet happiness."
+  },
+  "c8b8fcae33d45e1a8990d1cbbdd33afc86d9cf6430903f49ef3e2463911c3757": {
+    "dialogue": "Reality and unreality are intertwined, and common sense is constantly distorted."
+  },
+  "8c135a8eb5812e0654e47823f0d7b9821e0b91303220c8df81507d57aa3ba8e8": {
+    "dialogue": "Reality and unreality are intertwined, and common sense is constantly distorted. Magical stories, miraculous stories, will likely manifest in reality."
+  },
+  "2e0a686264f58e3c5591ebaeb8b36973604049ceedc5e039754249742065a001": {
+    "dialogue": "If asked whose doing this was, we would answer in unison:"
+  },
+  "5826d030af3e6796f593fd800d1d69e66b0cdd34ba6d294013ec68b6af1d5c63": {
+    "dialogue": "The little white bird that chose to stay with Ryuji shall, with a fluttering heart, witness miracles unfold."
+  },
+  "c9e37bd2b7d227d3f6c913a5d7ec4587463495e03c5051aaad7ced8412dd70b5": {
+    "dialogue": "A certain book housed within the Fantasy Library."
+  },
+  "8e696fa529a31aa0789568f630950d063ef4e0364c4d08407adb405fcbef43de": {
+    "dialogue": "It wasn't the readers, nor the authors, but the books themselves that embodied magic and miracles."
+  },
+  "c48a907952155307a49cae90ad2fe170b9b10c1c66cc5939b254ee521a81ec0c": {
+    "dialogue": "The storyteller was the \"Magic Book.\""
+  },
+  "89d12f0cf36d3c56888a3d4f4d548e23041828257d3455d64d98805543aba94e": {
+    "dialogue": "An extraordinary entity that erases the boundary between reality and fantasy."
+  },
+  "91c8d68ae62d107e00000192b3f40e02067ee56480a8c8d272add219aa84ab16": {
+    "dialogue": "The moment I set foot on the island"
+  },
+  "e969c7b7b39910ac7a29c438e009100efbdcc3ba6510cd0f8b0033003b78c81a": {
+    "dialogue": "The moment my foot touched the island's soil, the reality of my return hit me - and something welled up inside me before I could stop it."
+  },
+  "7da64eb5807ef172116f8043ec9bf96f0b64d9190b02ecd6f4def8136c00d3ce": {
+    "dialogue": "Bathed in the morning breeze, I now feel more than nostalgia - a deep affection - for this island that hasn't changed since I left two years ago."
+  },
+  "b5ae743d7e7529bd626c2ab9b9d62c11842e05c148a6a54ae1e78d9acd93aa0d": {
+    "dialogue": "Giving a small nod to the sailor who had delivered him, he stepped forward as if savoring the nostalgia."
   }
 }

@@ -293,7 +293,7 @@ def preprocess_text_for_translation(aggregated_text):
     return '\n'.join(preprocessed_lines), tag_mapping
 
 
-def translate_text(aggregated_input_text, hwnd, preset, target_language="en", additional_context="", context_limit=10):
+def translate_text(aggregated_input_text, hwnd, preset, target_language="en", additional_context="", context_limit=10, force_recache=False):
     """
     Translate the given text using an OpenAI-compatible API client, using game-specific caching.
 
@@ -304,6 +304,7 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
         target_language: The target language code (e.g., "en", "Spanish").
         additional_context: General instructions or context from the UI.
         context_limit: Max number of conversational exchanges (user+assistant pairs) to keep.
+        force_recache: If True, skip cache check and force API call, then update cache.
 
     Returns:
         A dictionary mapping original ROI names to translated text,
@@ -322,20 +323,23 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
         print("No valid text segments found after preprocessing. Nothing to translate.")
         return {} # Return empty dict if nothing to translate
 
-    # 2. Check Cache (Using simplified key)
+    # 2. Check Cache (Using simplified key), skip if force_recache is True
     cache_key = get_cache_key(preprocessed_text_for_llm, target_language)
-    cached_result = get_cached_translation(cache_key, cache_file_path)
-    if cached_result:
-        print(f"[LOG] Using cached translation for key: {cache_key[:10]}... from {cache_file_path.name}")
-        # Ensure cache returns the expected format (roi_name -> translation)
-        if isinstance(cached_result, dict) and not 'error' in cached_result:
-            # Quick check: does cached result contain keys for current request?
-            if all(roi_name in cached_result for roi_name in tag_mapping.values()):
-                return cached_result
+    if not force_recache:
+        cached_result = get_cached_translation(cache_key, cache_file_path)
+        if cached_result:
+            print(f"[LOG] Using cached translation for key: {cache_key[:10]}... from {cache_file_path.name}")
+            # Ensure cache returns the expected format (roi_name -> translation)
+            if isinstance(cached_result, dict) and not 'error' in cached_result:
+                # Quick check: does cached result contain keys for current request?
+                if all(roi_name in cached_result for roi_name in tag_mapping.values()):
+                    return cached_result
+                else:
+                    print("[LOG] Cached result seems incomplete for current request, fetching fresh translation.")
             else:
-                print("[LOG] Cached result seems incomplete for current request, fetching fresh translation.")
-        else:
-            print("[LOG] Cached result format mismatch or error, fetching fresh translation.")
+                print("[LOG] Cached result format mismatch or error, fetching fresh translation.")
+    else:
+        print(f"[LOG] Force recache requested for key: {cache_key[:10]}...")
 
 
     # 3. Prepare messages for API
@@ -456,8 +460,9 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
     add_context_message(current_assistant_message, context_limit)
 
     # Add to cache using the key generated earlier and the game-specific file
+    # This happens regardless of force_recache flag, overwriting previous entry
     set_cache_translation(cache_key, final_translations, cache_file_path)
-    print(f"[LOG] Translation cached successfully to {cache_file_path.name}")
+    print(f"[LOG] Translation cached/updated successfully in {cache_file_path.name}")
 
     return final_translations
 

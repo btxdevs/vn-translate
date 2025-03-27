@@ -1,3 +1,5 @@
+# --- START OF FILE ui/capture_tab.py ---
+
 import tkinter as tk
 from tkinter import ttk
 from ui.base import BaseTab
@@ -81,7 +83,8 @@ class CaptureTab(BaseTab):
         self.app.update_status("Refreshing window list...") # Use app's status update
         self.window_combo.config(state=tk.NORMAL) # Allow clearing
         self.window_combo.set("") # Clear current selection
-        self.app.selected_hwnd = None # Clear app's selected handle
+        # Don't clear app.selected_hwnd here, let on_window_selected handle it
+        # self.app.selected_hwnd = None # Clear app's selected handle
         try:
             windows = get_windows()
             # Filter out windows with no title or specific unwanted titles (like this app itself)
@@ -99,17 +102,29 @@ class CaptureTab(BaseTab):
 
             if window_titles:
                 # Try to re-select the previously selected window if it still exists
-                last_hwnd = getattr(self.app, 'selected_hwnd_on_refresh', None) # Use a temp attr if needed
+                # Use the app's current selected_hwnd
+                last_hwnd = self.app.selected_hwnd
                 if last_hwnd and last_hwnd in self.window_handles:
                     try:
                         idx = self.window_handles.index(last_hwnd)
                         self.window_combo.current(idx)
-                        self.on_window_selected() # Update app's selected HWND
+                        # Don't call on_window_selected here, avoid potential loop/redundancy
                     except ValueError:
-                        pass # Handle not found
+                        # Handle not found, selection will be cleared or default
+                        self.app.selected_hwnd = None # Clear app state if window disappeared
+                        self.app.load_rois_for_hwnd(None) # Clear ROIs if window gone
+                elif self.app.selected_hwnd:
+                    # If a window was selected but isn't in the new list
+                    self.app.selected_hwnd = None
+                    self.app.load_rois_for_hwnd(None) # Clear ROIs
+
                 self.app.update_status(f"Found {len(window_titles)} windows. Select one.")
             else:
                 self.app.update_status("No suitable windows found.")
+                if self.app.selected_hwnd:
+                    self.app.selected_hwnd = None
+                    self.app.load_rois_for_hwnd(None) # Clear ROIs if no windows found
+
             self.window_combo.config(state="readonly")
 
         except Exception as e:
@@ -118,7 +133,7 @@ class CaptureTab(BaseTab):
 
 
     def on_window_selected(self, event=None):
-        """Update the application's selected HWND when a window is chosen."""
+        """Update the application's selected HWND and load game-specific ROIs."""
         try:
             selected_index = self.window_combo.current()
             if selected_index >= 0 and selected_index < len(self.window_handles):
@@ -128,18 +143,26 @@ class CaptureTab(BaseTab):
                     title = self.window_combo.get().split(":", 1)[-1].strip()
                     self.app.update_status(f"Window selected: {title}")
                     print(f"Selected window HWND: {self.app.selected_hwnd}")
+
+                    # --- Trigger automatic ROI loading for the selected window ---
+                    self.app.load_rois_for_hwnd(new_hwnd)
+                    # --- End of ROI loading trigger ---
+
                     # If capture is running, changing window might require restart?
                     if self.app.capturing:
+                        # Stop capture if window changes while running? Or just update status?
                         self.app.update_status(f"Window changed to {title}. Restart capture if needed.")
-                        # self.app.stop_capture() # Or maybe just let it fail/recover?
+                        # self.app.stop_capture() # Optional: Force stop on window change
             else:
                 # This case should ideally not happen with readonly combobox selection
                 if self.app.selected_hwnd is not None:
                     self.app.selected_hwnd = None
                     self.app.update_status("No window selected.")
+                    self.app.load_rois_for_hwnd(None) # Clear ROIs if selection cleared
         except Exception as e:
             self.app.selected_hwnd = None
             self.app.update_status(f"Error selecting window: {e}")
+            self.app.load_rois_for_hwnd(None) # Clear ROIs on error
 
 
     def on_language_changed(self, event=None):
@@ -197,3 +220,5 @@ class CaptureTab(BaseTab):
             # If capture stopped while in snapshot mode (unlikely but possible)
             self.snapshot_btn.config(state=tk.DISABLED)
             self.on_capture_stopped() # Ensure UI reflects stopped state
+
+# --- END OF FILE ui/capture_tab.py ---

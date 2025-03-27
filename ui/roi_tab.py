@@ -3,7 +3,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from ui.base import BaseTab
-from utils.config import save_rois, load_rois
+from utils.config import save_rois # Removed load_rois import
 # Import settings functions directly for getting config and saving removal
 from utils.settings import get_overlay_config_for_roi, update_settings, get_setting, set_setting
 import os
@@ -73,17 +73,17 @@ class ROITab(BaseTab):
         self.config_overlay_btn.pack(pady=(5, 2), anchor=tk.N)
 
 
-        # --- Save/Load Buttons ---
+        # --- Save Button (Removed Load/Save As) ---
         file_btn_frame = ttk.Frame(roi_frame)
         file_btn_frame.pack(fill=tk.X, pady=(10, 0))
 
-        self.save_rois_btn = ttk.Button(file_btn_frame, text="Save ROIs As...",
-                                        command=self.save_rois)
+        self.save_rois_btn = ttk.Button(file_btn_frame, text="Save ROIs for Current Game",
+                                        command=self.save_rois_for_current_game) # Changed command
         self.save_rois_btn.pack(side=tk.LEFT, padx=5)
 
-        self.load_rois_btn = ttk.Button(file_btn_frame, text="Load ROIs...",
-                                        command=self.load_rois)
-        self.load_rois_btn.pack(side=tk.LEFT, padx=5)
+        # self.load_rois_btn = ttk.Button(file_btn_frame, text="Load ROIs...",
+        #                                 command=self.load_rois) # REMOVED
+        # self.load_rois_btn.pack(side=tk.LEFT, padx=5) # REMOVED
 
 
     def on_roi_selected(self, event=None):
@@ -130,7 +130,7 @@ class ROITab(BaseTab):
             self.roi_listbox.select_set(idx_to_select)
             self.roi_listbox.activate(idx_to_select)
         elif self.roi_listbox.size() > 0:
-            idx_to_select = -1
+            idx_to_select = -1 # No selection if index out of bounds
 
         # Update the ROI list in the Overlay Tab as well
         if hasattr(self.app, 'overlay_tab') and self.app.overlay_tab.frame.winfo_exists():
@@ -139,53 +139,54 @@ class ROITab(BaseTab):
         self.on_roi_selected() # Update button states
 
 
-    def save_rois(self):
-        """Save ROIs using the config utility."""
+    def save_rois_for_current_game(self):
+        """Save ROIs for the currently selected game window."""
+        if not self.app.selected_hwnd:
+            messagebox.showwarning("Save ROIs", "No game window selected.", parent=self.app.master)
+            return
         if not self.app.rois:
             messagebox.showwarning("Save ROIs", "There are no ROIs defined to save.", parent=self.app.master)
             return
 
-        new_config_file = save_rois(self.app.rois, self.app.config_file)
-        if new_config_file and new_config_file != self.app.config_file:
-            self.app.config_file = new_config_file
-            set_setting("last_roi_config", new_config_file) # Save path to settings
-            self.app.update_status(f"Saved {len(self.app.rois)} ROIs to {os.path.basename(new_config_file)}")
-            self.app.master.title(f"Visual Novel Translator - {os.path.basename(new_config_file)}")
-        elif new_config_file:
-            # Saved to the same file, ensure path is saved to settings too
-            set_setting("last_roi_config", new_config_file)
-            self.app.update_status(f"Saved {len(self.app.rois)} ROIs to {os.path.basename(new_config_file)}")
-
-
-    def load_rois(self):
-        """Load ROIs using the config utility."""
-        # Suggest last used file from settings
-        initial_suggestion = get_setting("last_roi_config", self.app.config_file)
-        rois, loaded_config_file = load_rois(initial_suggestion)
-
-        if loaded_config_file and rois is not None:
-            self.app.rois = rois
-            self.app.config_file = loaded_config_file
-            # Important: Save the newly loaded path as the 'last_roi_config'
-            set_setting("last_roi_config", loaded_config_file)
-
-            self.update_roi_list() # Updates own list and overlay tab's list
-            if hasattr(self.app, 'overlay_manager'):
-                self.app.overlay_manager.rebuild_overlays() # Rebuild based on new ROIs
-
-            self.app.update_status(f"Loaded {len(rois)} ROIs from {os.path.basename(loaded_config_file)}")
-            self.app.master.title(f"Visual Novel Translator - {os.path.basename(loaded_config_file)}")
-            # Clear stale data
-            self.app.text_history = {}
-            self.app.stable_texts = {}
-            if hasattr(self.app, 'text_tab'): self.app.text_tab.update_text({})
-            if hasattr(self.app, 'stable_text_tab'): self.app.stable_text_tab.update_text({})
-            if hasattr(self.app, 'translation_tab'): self.app.translation_tab.translation_display.config(state=tk.NORMAL); self.app.translation_tab.translation_display.delete(1.0, tk.END); self.app.translation_tab.translation_display.config(state=tk.DISABLED)
-
-        elif rois is None and loaded_config_file is None:
-            self.app.update_status("ROI loading failed. See console or previous message.")
+        saved_path = save_rois(self.app.rois, self.app.selected_hwnd)
+        if saved_path:
+            self.app.config_file = saved_path # Update app's current config file path
+            self.app.update_status(f"Saved {len(self.app.rois)} ROIs for current game.")
+            # Update window title to reflect the saved file (optional, but consistent)
+            self.app.master.title(f"Visual Novel Translator - {os.path.basename(saved_path)}")
         else:
-            self.app.update_status("ROI loading cancelled.")
+            # Error message shown by save_rois or already handled
+            self.app.update_status("Failed to save ROIs for current game.")
+
+    # def load_rois(self): # REMOVED - Loading is automatic on window selection now
+    #     """Load ROIs using the config utility."""
+    #     # Suggest last used file from settings
+    #     initial_suggestion = get_setting("last_roi_config", self.app.config_file)
+    #     rois, loaded_config_file = load_rois(initial_suggestion)
+    #
+    #     if loaded_config_file and rois is not None:
+    #         self.app.rois = rois
+    #         self.app.config_file = loaded_config_file
+    #         # Important: Save the newly loaded path as the 'last_roi_config'
+    #         set_setting("last_roi_config", loaded_config_file)
+    #
+    #         self.update_roi_list() # Updates own list and overlay tab's list
+    #         if hasattr(self.app, 'overlay_manager'):
+    #             self.app.overlay_manager.rebuild_overlays() # Rebuild based on new ROIs
+    #
+    #         self.app.update_status(f"Loaded {len(rois)} ROIs from {os.path.basename(loaded_config_file)}")
+    #         self.app.master.title(f"Visual Novel Translator - {os.path.basename(loaded_config_file)}")
+    #         # Clear stale data
+    #         self.app.text_history = {}
+    #         self.app.stable_texts = {}
+    #         if hasattr(self.app, 'text_tab'): self.app.text_tab.update_text({})
+    #         if hasattr(self.app, 'stable_text_tab'): self.app.stable_text_tab.update_text({})
+    #         if hasattr(self.app, 'translation_tab'): self.app.translation_tab.translation_display.config(state=tk.NORMAL); self.app.translation_tab.translation_display.delete(1.0, tk.END); self.app.translation_tab.translation_display.config(state=tk.DISABLED)
+    #
+    #     elif rois is None and loaded_config_file is None:
+    #         self.app.update_status("ROI loading failed. See console or previous message.")
+    #     else:
+    #         self.app.update_status("ROI loading cancelled.")
 
 
     def move_roi_up(self):
@@ -256,6 +257,8 @@ class ROITab(BaseTab):
 
         self.update_roi_list()
         self.app.update_status(f"ROI '{roi_name}' deleted.")
+        # Consider triggering an auto-save here? Or rely on user pressing save button?
+        # self.save_rois_for_current_game() # Optional: Auto-save after deletion
 
 
     def configure_selected_overlay(self):

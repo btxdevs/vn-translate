@@ -40,18 +40,28 @@ class FloatingControls(tk.Toplevel):
         # --- Content ---
         button_frame = ttk.Frame(self, padding=5) # Removed style reference for simplicity
         button_frame.pack(fill=tk.BOTH, expand=True)
+        col_index = 0 # Keep track of column index
 
         # Re-translate Button
         self.retranslate_btn = ttk.Button(button_frame, text="🔄", width=3, style="Floating.TButton",
                                           command=self.app.translation_tab.perform_translation)
-        self.retranslate_btn.grid(row=0, column=0, padx=2, pady=2)
-        self.add_tooltip(self.retranslate_btn, "Re-translate stable text")
+        self.retranslate_btn.grid(row=0, column=col_index, padx=2, pady=2)
+        self.add_tooltip(self.retranslate_btn, "Re-translate (use cache)")
+        col_index += 1
+
+        # Force Re-translate Button
+        self.force_retranslate_btn = ttk.Button(button_frame, text="⚡", width=3, style="Floating.TButton",
+                                                command=self.app.translation_tab.perform_force_translation) # Changed command
+        self.force_retranslate_btn.grid(row=0, column=col_index, padx=2, pady=2)
+        self.add_tooltip(self.force_retranslate_btn, "Force re-translate & update cache")
+        col_index += 1
 
         # Copy Last Translation Button
         self.copy_btn = ttk.Button(button_frame, text="📋", width=3, style="Floating.TButton",
                                    command=self.copy_last_translation)
-        self.copy_btn.grid(row=0, column=1, padx=2, pady=2)
+        self.copy_btn.grid(row=0, column=col_index, padx=2, pady=2)
         self.add_tooltip(self.copy_btn, "Copy last translation(s)")
+        col_index += 1
 
         # --- Toggle Auto-Translate Button (using Checkbutton styled as Button) ---
         # Ensure TranslationTab exists before accessing its state
@@ -63,8 +73,9 @@ class FloatingControls(tk.Toplevel):
         self.auto_btn = ttk.Checkbutton(button_frame, text="🤖", style="Toolbutton.TCheckbutton", # Use Checkbutton with custom style
                                         variable=self.auto_var, command=self.toggle_auto_translate,
                                         width=3)
-        self.auto_btn.grid(row=0, column=2, padx=2, pady=2)
+        self.auto_btn.grid(row=0, column=col_index, padx=2, pady=2)
         self.add_tooltip(self.auto_btn, "Toggle Auto-Translate")
+        col_index += 1
 
         # --- Show/Hide Overlays Button (using Checkbutton styled as Button) ---
         initial_overlay_state = True
@@ -75,14 +86,16 @@ class FloatingControls(tk.Toplevel):
         self.overlay_btn = ttk.Checkbutton(button_frame, text="👁️", style="Toolbutton.TCheckbutton",
                                            variable=self.overlay_var, command=self.toggle_overlays,
                                            width=3)
-        self.overlay_btn.grid(row=0, column=3, padx=2, pady=2)
+        self.overlay_btn.grid(row=0, column=col_index, padx=2, pady=2)
         self.add_tooltip(self.overlay_btn, "Show/Hide Overlays")
+        col_index += 1
 
         # Close Button
         self.close_btn = ttk.Button(button_frame, text="✕", width=2, style="Floating.TButton",
                                     command=self.withdraw) # Hide instead of destroy
-        self.close_btn.grid(row=0, column=4, padx=(5, 2), pady=2)
+        self.close_btn.grid(row=0, column=col_index, padx=(5, 2), pady=2)
         self.add_tooltip(self.close_btn, "Hide Controls")
+        col_index += 1
 
         # --- Initial Position ---
         saved_pos = get_setting("floating_controls_pos")
@@ -149,15 +162,23 @@ class FloatingControls(tk.Toplevel):
 
     def copy_last_translation(self):
         """Copies the last successful translation to the clipboard."""
+        # Check if translation tab exists and has the attribute
+        if not hasattr(self.app, 'translation_tab') or not hasattr(self.app.translation_tab, 'last_translation_result'):
+            self.app.update_status("No translation available.")
+            return
+
         last_result = getattr(self.app.translation_tab, 'last_translation_result', None)
         if last_result and isinstance(last_result, dict):
             copy_text = ""
-            for roi in self.app.rois: # Iterate in ROI order
+            # Use app's current ROI order for consistency
+            rois_to_iterate = self.app.rois if hasattr(self.app, 'rois') else []
+            for roi in rois_to_iterate:
                 roi_name = roi.name
                 if roi_name in last_result:
                     translation = last_result[roi_name]
-                    if translation and translation != "[Translation Missing]":
-                        if copy_text: copy_text += "\n\n" # Separator
+                    # Avoid copying placeholder text
+                    if translation and translation != "[Translation Missing]" and translation != "[Translation N/A]":
+                        if copy_text: copy_text += "\n\n" # Separator between different ROI translations
                         copy_text += translation
 
             if copy_text:
@@ -232,10 +253,13 @@ class FloatingControls(tk.Toplevel):
     def update_button_states(self):
         """Syncs button check states with the application state (e.g., on show)."""
         try:
-            if hasattr(self.app, 'translation_tab') and self.app.translation_tab and self.auto_var:
-                self.auto_var.set(self.app.translation_tab.is_auto_translate_enabled())
-            if hasattr(self.app, 'overlay_manager') and self.app.overlay_manager and self.overlay_var:
-                self.overlay_var.set(self.app.overlay_manager.global_overlays_enabled)
+            # Ensure widgets exist before trying to access/set variables
+            if hasattr(self.app, 'translation_tab') and self.app.translation_tab and hasattr(self, 'auto_var') and self.auto_var:
+                if self.auto_btn.winfo_exists():
+                    self.auto_var.set(self.app.translation_tab.is_auto_translate_enabled())
+            if hasattr(self.app, 'overlay_manager') and self.app.overlay_manager and hasattr(self, 'overlay_var') and self.overlay_var:
+                if self.overlay_btn.winfo_exists():
+                    self.overlay_var.set(self.app.overlay_manager.global_overlays_enabled)
             # print("Floating controls states updated.") # Less verbose
         except tk.TclError:
             # Can happen if widgets are being destroyed during update

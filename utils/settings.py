@@ -8,10 +8,10 @@ SETTINGS_FILE = "vn_translator_settings.json"
 
 # Default settings
 DEFAULT_SETTINGS = {
-    "last_roi_config": "vn_translator_config.json",
+    # Removed "last_roi_config" as it's now game-specific/automatic
     "last_preset_name": None,
     "target_language": "en",
-    "additional_context": "",
+    # Removed "additional_context" - now game-specific
     "stable_threshold": 3,
     "max_display_width": 800,
     "max_display_height": 600,
@@ -19,7 +19,8 @@ DEFAULT_SETTINGS = {
     "ocr_language": "jpn",
     "global_overlays_enabled": True,
     "overlay_settings": {}, # roi_name: {config dict}
-    "floating_controls_pos": None
+    "floating_controls_pos": None,
+    "game_specific_context": {} # NEW: {game_hash: context_string}
 }
 
 # Default values for a single overlay's settings
@@ -44,7 +45,9 @@ def load_settings():
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 loaded_settings = json.load(f)
-            settings.update(loaded_settings)
+            # Merge carefully in case new defaults were added
+            for key, default_value in DEFAULT_SETTINGS.items():
+                settings[key] = loaded_settings.get(key, default_value)
         except Exception as e:
             print(f"Error loading settings: {e}. Using defaults.")
     return settings
@@ -54,7 +57,7 @@ def save_settings(settings):
     try:
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
             json.dump(settings, f, indent=2)
-        print(f"Settings saved to {SETTINGS_FILE}")
+        # print(f"Settings saved to {SETTINGS_FILE}") # Less verbose
         return True
     except Exception as e:
         print(f"Error saving settings: {e}")
@@ -63,6 +66,7 @@ def save_settings(settings):
 def get_setting(key, default=None):
     """Get a specific setting value."""
     settings = load_settings()
+    # Use the key's default from DEFAULT_SETTINGS if available, otherwise use the provided default
     fallback_default = DEFAULT_SETTINGS.get(key, default)
     return settings.get(key, fallback_default)
 

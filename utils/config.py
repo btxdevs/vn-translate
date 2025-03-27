@@ -1,118 +1,126 @@
+# --- START OF FILE utils/config.py ---
+
 import json
 import os
 import tkinter.messagebox as messagebox
-import tkinter.filedialog as filedialog
+# No longer need filedialog
 from utils.roi import ROI
-from utils.settings import set_setting, get_setting # Import get_setting
+from utils.settings import set_setting, get_setting # Keep get_setting if used elsewhere, remove if not
+from utils.capture import get_executable_details # For game hashing
+import hashlib # For game hashing
+from pathlib import Path # For directory handling
 
-# Default configuration file paths
-DEFAULT_ROI_CONFIG_FILE = "vn_translator_config.json"
+# Default configuration file paths (Keep presets, ROI default is less relevant now)
 PRESETS_FILE = "translation_presets.json"
 
-def save_rois(rois, current_config_file=None):
+# --- Define Directories ---
+APP_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) # App root
+ROI_CONFIGS_DIR = APP_DIR / "roi_configs"
+
+def _ensure_roi_configs_dir():
+    """Make sure the ROI configs directory exists"""
+    try:
+        ROI_CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        print(f"Error creating ROI configs directory {ROI_CONFIGS_DIR}: {e}")
+
+def _get_game_hash(hwnd):
+    """Generates a hash based on the game's executable path and size."""
+    # This function remains the same as the one used for caching
+    exe_path, file_size = get_executable_details(hwnd)
+    if exe_path and file_size is not None:
+        try:
+            # Normalize path, use lower case, combine with size
+            identity_string = f"{os.path.normpath(exe_path).lower()}|{file_size}"
+            hasher = hashlib.sha256()
+            hasher.update(identity_string.encode('utf-8'))
+            return hasher.hexdigest()
+        except Exception as e:
+            print(f"Error generating game hash: {e}")
+    return None
+
+def _get_roi_config_path(hwnd):
+    """Gets the specific ROI config file path for the given game window."""
+    game_hash = _get_game_hash(hwnd)
+    if game_hash:
+        return ROI_CONFIGS_DIR / f"{game_hash}_rois.json"
+    else:
+        print("Warning: Could not determine game hash for ROI config path.")
+        return None # Indicate failure to get path
+
+def save_rois(rois, hwnd):
     """
-    Save ROIs to a JSON configuration file. Prompts user if no file specified.
+    Save ROIs automatically to a game-specific JSON configuration file.
 
     Args:
-        rois: List of ROI objects
-        current_config_file: The path currently used by the app.
+        rois: List of ROI objects.
+        hwnd: The window handle of the game being configured.
 
     Returns:
-        The path to the saved config file or None if cancelled/failed
+        The path to the saved config file or None if failed.
     """
+    if not hwnd:
+        messagebox.showerror("Error", "Cannot save ROIs: No game window selected.")
+        return None
     if not rois:
-        messagebox.showwarning("Warning", "No ROIs to save.")
-        return current_config_file # Return the original path if nothing saved
+        messagebox.showwarning("Warning", "No ROIs defined to save.")
+        return None # Nothing to save
+
+    _ensure_roi_configs_dir()
+    save_path = _get_roi_config_path(hwnd)
+
+    if not save_path:
+        messagebox.showerror("Error", "Could not determine game-specific file path to save ROIs.")
+        return None
 
     try:
-        save_path = filedialog.asksaveasfilename(
-            defaultextension=".json",
-            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
-            initialdir=os.path.dirname(current_config_file) if current_config_file else ".",
-            initialfile=os.path.basename(current_config_file) if current_config_file else DEFAULT_ROI_CONFIG_FILE,
-            title="Save ROI Configuration As"
-        )
-        if not save_path:
-            print("ROI save cancelled by user.")
-            return current_config_file # Return original path if cancelled
-
         roi_data = [roi.to_dict() for roi in rois]
         with open(save_path, 'w', encoding="utf-8") as f:
             json.dump(roi_data, f, indent=2)
 
-        # Save the path in application settings
-        set_setting("last_roi_config", save_path)
-        print(f"ROIs saved successfully to {save_path}")
-        return save_path # Return the new path
+        print(f"ROIs saved successfully for current game to {save_path.name}")
+        return str(save_path) # Return the path as a string
     except Exception as e:
-        messagebox.showerror("Error", f"Failed to save ROIs: {str(e)}")
-        return current_config_file # Return original path on error
+        messagebox.showerror("Error", f"Failed to save ROIs to {save_path.name}: {str(e)}")
+        return None
 
-def load_rois(initial_path=None):
+def load_rois(hwnd):
     """
-    Load ROIs from a JSON configuration file. Uses initial_path or prompts user.
+    Load ROIs automatically from the game-specific JSON configuration file.
 
     Args:
-        initial_path: Path to attempt loading from first.
+        hwnd: The window handle of the game.
 
     Returns:
-        A tuple of (list of ROI objects, config_file_path) or ([], None) on failure/cancel
-        Returns (None, None) on explicit error during load after selection.
+        A tuple of (list of ROI objects, config_file_path_string) or ([], None) if not found/failed.
     """
-    open_path = initial_path
-    rois = []
-
-    # Try loading from initial_path first if it exists
-    if open_path and os.path.exists(open_path):
-        try:
-            with open(open_path, 'r', encoding="utf-8") as f:
-                roi_data = json.load(f)
-            rois = [ROI.from_dict(data) for data in roi_data]
-            set_setting("last_roi_config", open_path)
-            print(f"ROIs loaded successfully from {open_path}")
-            return rois, open_path
-        except Exception as e:
-            print(f"Failed to load ROIs from '{open_path}': {str(e)}. Prompting user.")
-            # Fall through to prompt user
-            open_path = None # Clear path so file dialog opens
-
-    # If initial load failed or no path provided, prompt user
-    if not open_path:
-        # Get the directory of the last known config file
-        last_config_path = get_setting("last_roi_config")
-        initial_dir = "."
-        if last_config_path and os.path.exists(os.path.dirname(last_config_path)):
-            initial_dir = os.path.dirname(last_config_path)
-
-
-        open_path = filedialog.askopenfilename(
-            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
-            initialdir=initial_dir,
-            title="Load ROI Configuration"
-        )
-        if not open_path:
-            print("ROI load cancelled by user.")
-            return [], None # Return empty list and None path if cancelled
-
-    # Try loading from the selected path
-    if open_path and os.path.exists(open_path):
-        try:
-            with open(open_path, 'r', encoding="utf-8") as f:
-                roi_data = json.load(f)
-            rois = [ROI.from_dict(data) for data in roi_data]
-            set_setting("last_roi_config", open_path)
-            print(f"ROIs loaded successfully from {open_path}")
-            return rois, open_path
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to load ROIs from '{open_path}': {str(e)}")
-            return None, None # Explicit error indication
-    elif open_path:
-        messagebox.showerror("Error", f"File not found: '{open_path}'")
-        return None, None # Explicit error indication
-    else:
-        # Should not happen if askopenfilename was used, but handle just in case
+    if not hwnd:
+        print("Cannot load ROIs: No game window handle provided.")
         return [], None
 
+    _ensure_roi_configs_dir() # Ensure directory exists before trying to load
+    load_path = _get_roi_config_path(hwnd)
+    rois = []
+
+    if not load_path:
+        print("Could not determine game-specific file path to load ROIs.")
+        return [], None
+
+    if load_path.exists():
+        try:
+            with open(load_path, 'r', encoding="utf-8") as f:
+                roi_data = json.load(f)
+            rois = [ROI.from_dict(data) for data in roi_data]
+            print(f"ROIs loaded successfully for current game from {load_path.name}")
+            return rois, str(load_path) # Return ROIs and path string
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load ROIs from '{load_path.name}': {str(e)}")
+            return [], None # Return empty list on error after finding file
+    else:
+        print(f"No ROI config file found for current game ({load_path.name}).")
+        return [], None # Return empty list if file doesn't exist
+
+# --- Presets saving/loading remains the same ---
 
 def save_translation_presets(presets, file_path=PRESETS_FILE):
     """
@@ -126,7 +134,11 @@ def save_translation_presets(presets, file_path=PRESETS_FILE):
         True if successful, False otherwise
     """
     try:
-        with open(file_path, "w", encoding="utf-8") as f:
+        # Ensure the directory for the presets file exists if it's not in the root
+        preset_path_obj = Path(file_path)
+        preset_path_obj.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(preset_path_obj, "w", encoding="utf-8") as f:
             json.dump(presets, f, indent=2)
         print(f"Translation presets saved to {file_path}")
         return True
@@ -145,9 +157,10 @@ def load_translation_presets(file_path=PRESETS_FILE):
     Returns:
         Dictionary of translation presets
     """
-    if os.path.exists(file_path):
+    preset_path_obj = Path(file_path)
+    if preset_path_obj.exists():
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(preset_path_obj, "r", encoding="utf-8") as f:
                 content = f.read()
                 if not content: return {} # Handle empty file
                 return json.loads(content)
@@ -159,3 +172,5 @@ def load_translation_presets(file_path=PRESETS_FILE):
             print(f"Error loading translation presets: {e}")
             messagebox.showerror("Error", f"Failed to load translation presets: {e}. Using defaults or empty.")
     return {}
+
+# --- END OF FILE utils/config.py ---

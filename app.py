@@ -10,6 +10,7 @@ import os
 # No longer need win32gui here unless used elsewhere
 from paddleocr import PaddleOCR, paddleocr
 import platform
+from pathlib import Path # Import Path
 
 # Import utilities
 from utils.capture import get_window_title, capture_window
@@ -24,6 +25,7 @@ from utils.settings import (
     save_overlay_config_for_roi,
 )
 from utils.roi import ROI
+from utils.translation import CACHE_DIR # Import CACHE_DIR for ensuring it exists
 
 # Import UI components
 from ui.capture_tab import CaptureTab
@@ -56,6 +58,13 @@ class VisualNovelTranslatorApp:
         master.geometry("1200x800")
         master.minsize(1000, 700)
         master.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        # --- Ensure Cache Directory Exists ---
+        try:
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            print(f"Cache directory ensured at: {CACHE_DIR}")
+        except Exception as e:
+            print(f"Warning: Could not create cache directory {CACHE_DIR}: {e}")
 
         # --- Initialize variables ---
         self.capturing = False
@@ -257,6 +266,10 @@ class VisualNovelTranslatorApp:
             self.master.after_idle(lambda: self.update_status(f"Initializing OCR ({lang_code})..."))
 
             try:
+                # Explicitly check for GPU availability if desired
+                # use_gpu = paddleocr.is_gpu_available() # Requires GPU-enabled PaddlePaddle
+                # print(f"Using GPU for OCR: {use_gpu}")
+                # new_ocr_engine = PaddleOCR(use_angle_cls=True, lang=ocr_lang_paddle, show_log=False, use_gpu=use_gpu)
                 new_ocr_engine = PaddleOCR(use_angle_cls=True, lang=ocr_lang_paddle, show_log=False)
                 with OCR_ENGINE_LOCK:
                     self.ocr = new_ocr_engine
@@ -552,10 +565,18 @@ class VisualNovelTranslatorApp:
                 ocr_result_raw = ocr_engine.ocr(roi_img, cls=True)
                 text_lines = []
                 if ocr_result_raw and isinstance(ocr_result_raw, list) and len(ocr_result_raw) > 0:
+                    # Handle potential nested list structure from PaddleOCR
                     current_result_set = ocr_result_raw[0] if isinstance(ocr_result_raw[0], list) else ocr_result_raw
                     if current_result_set:
                         for item in current_result_set:
-                            text_info = item[1] if isinstance(item, list) and len(item) >= 2 else None
+                            # Extract text part, handling different possible structures
+                            text_info = None
+                            if isinstance(item, list) and len(item) >= 2:
+                                text_info = item[1] # Often [box, (text, confidence)]
+                            elif isinstance(item, tuple) and len(item) >= 2:
+                                text_info = item # Sometimes just (text, confidence)? Check Paddle docs/output.
+
+                            # Check if text_info is valid and extract text
                             if (
                                     isinstance(text_info, (tuple, list))
                                     and len(text_info) >= 1
@@ -849,11 +870,18 @@ class VisualNovelTranslatorApp:
             self.overlay_manager.destroy_all_overlays()
         if self.floating_controls and self.floating_controls.winfo_exists():
             try:
+                # Save position only if it's currently visible/normal
                 if self.floating_controls.state() == "normal":
-                    x, y = map(int, self.floating_controls.geometry().split("+")[1:])
-                    set_setting("floating_controls_pos", f"{x},{y}")
-            except Exception:
-                pass
+                    # Extract geometry parts carefully
+                    geo = self.floating_controls.geometry() # e.g., "150x50+100+200"
+                    parts = geo.split('+')
+                    if len(parts) == 3: # Should have size, x, y
+                        x, y = parts[1], parts[2]
+                        set_setting("floating_controls_pos", f"{x},{y}")
+                    else:
+                        print(f"Warning: Could not parse floating controls geometry for saving: {geo}")
+            except Exception as e:
+                print(f"Error saving floating controls position: {e}")
             try:
                 self.floating_controls.destroy()
             except tk.TclError:

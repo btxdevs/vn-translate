@@ -1,3 +1,5 @@
+# --- START OF FILE utils/translation.py ---
+
 import json
 import re
 import os
@@ -5,53 +7,81 @@ from openai import OpenAI
 from pathlib import Path
 import hashlib # For cache key generation
 import time # For potential corrupted cache backup naming
-
+from utils.capture import get_executable_details # Import the new function
 
 # File-based cache settings
-CACHE_DIR = Path(os.path.expanduser("~/.ocrtrans/cache"))
-CACHE_FILE = CACHE_DIR / "translation_cache.json"
+APP_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) # Get app root directory
+CACHE_DIR = APP_DIR / "cache"
 
 # Context management (global list)
 context_messages = []
 
 def _ensure_cache_dir():
     """Make sure the cache directory exists"""
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        print(f"Error creating cache directory {CACHE_DIR}: {e}")
 
-def _load_cache():
-    """Load the translation cache from disk"""
+def _get_game_hash(hwnd):
+    """Generates a hash based on the game's executable path and size."""
+    exe_path, file_size = get_executable_details(hwnd)
+    if exe_path and file_size is not None:
+        try:
+            # Normalize path, use lower case, combine with size
+            identity_string = f"{os.path.normpath(exe_path).lower()}|{file_size}"
+            hasher = hashlib.sha256()
+            hasher.update(identity_string.encode('utf-8'))
+            return hasher.hexdigest()
+        except Exception as e:
+            print(f"Error generating game hash: {e}")
+    return None
+
+def _get_cache_file_path(hwnd):
+    """Gets the specific cache file path for the given game window."""
+    game_hash = _get_game_hash(hwnd)
+    if game_hash:
+        return CACHE_DIR / f"{game_hash}.json"
+    else:
+        print("Warning: Could not determine game hash. Using default cache file.")
+        # Fallback to a generic name if hashing fails
+        return CACHE_DIR / "default_cache.json"
+
+
+def _load_cache(cache_file_path):
+    """Load the translation cache from the specified game file"""
     _ensure_cache_dir()
     try:
-        if CACHE_FILE.exists():
-            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+        if cache_file_path.exists():
+            with open(cache_file_path, 'r', encoding='utf-8') as f:
                 # Check if file is empty
                 content = f.read()
                 if not content:
                     return {}
                 return json.loads(content)
     except json.JSONDecodeError:
-        print(f"Warning: Cache file {CACHE_FILE} is corrupted or empty. Starting fresh cache.")
+        print(f"Warning: Cache file {cache_file_path} is corrupted or empty. Starting fresh cache.")
         try:
             # Optionally backup corrupted file
-            corrupted_path = CACHE_FILE.parent / f"{CACHE_FILE.name}.corrupted_{int(time.time())}"
-            os.rename(CACHE_FILE, corrupted_path)
+            corrupted_path = cache_file_path.parent / f"{cache_file_path.name}.corrupted_{int(time.time())}"
+            os.rename(cache_file_path, corrupted_path)
             print(f"Corrupted cache backed up to {corrupted_path}")
         except Exception as backup_err:
             print(f"Error backing up corrupted cache file: {backup_err}")
         return {}
     except Exception as e:
-        print(f"Error loading cache: {e}")
+        print(f"Error loading cache from {cache_file_path}: {e}")
     return {}
 
 
-def _save_cache(cache):
-    """Save the translation cache to disk"""
+def _save_cache(cache, cache_file_path):
+    """Save the translation cache to the specified game file"""
     _ensure_cache_dir()
     try:
-        with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+        with open(cache_file_path, 'w', encoding='utf-8') as f:
             json.dump(cache, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"Error saving cache: {e}")
+        print(f"Error saving cache to {cache_file_path}: {e}")
 
 def reset_context():
     """Reset the translation context history."""
@@ -80,44 +110,73 @@ def add_context_message(message, context_limit):
         print(f"Context trimmed to last {len(context_messages)} messages (limit: {limit} exchanges).")
 
 
-def clear_cache():
-    """Clear the translation cache."""
-    if CACHE_FILE.exists():
-        try:
-            os.remove(CACHE_FILE)
-            print("Translation cache file deleted.")
-            return "Translation cache has been cleared."
-        except Exception as e:
-            print(f"Error deleting cache file {CACHE_FILE}: {e}")
-            return f"Error clearing cache: {e}"
-    else:
-        print("Translation cache file not found.")
-        return "Translation cache was already empty."
+def clear_current_game_cache(hwnd):
+    """Clear the translation cache for the currently selected game."""
+    cache_file_path = _get_cache_file_path(hwnd)
+    if not cache_file_path:
+        return "Could not identify game to clear cache."
 
-def get_cache_key(text, preset, target_language, additional_context):
-    """Generate a unique cache key based on input parameters."""
+    if cache_file_path.exists():
+        try:
+            os.remove(cache_file_path)
+            print(f"Cache file deleted: {cache_file_path}")
+            return f"Cache cleared for the current game ({cache_file_path.stem})."
+        except Exception as e:
+            print(f"Error deleting cache file {cache_file_path}: {e}")
+            return f"Error clearing current game cache: {e}"
+    else:
+        print(f"Cache file not found for current game: {cache_file_path}")
+        return "Cache for the current game was already empty."
+
+def clear_all_cache():
+    """Clear all translation cache files in the cache directory."""
+    _ensure_cache_dir()
+    cleared_count = 0
+    errors = []
+    try:
+        for item in CACHE_DIR.iterdir():
+            if item.is_file() and item.suffix == '.json':
+                try:
+                    os.remove(item)
+                    cleared_count += 1
+                    print(f"Deleted cache file: {item.name}")
+                except Exception as e:
+                    errors.append(item.name)
+                    print(f"Error deleting cache file {item.name}: {e}")
+
+        if errors:
+            return f"Cleared {cleared_count} cache files. Errors deleting: {', '.join(errors)}."
+        elif cleared_count > 0:
+            return f"Successfully cleared all {cleared_count} translation cache files."
+        else:
+            return "Cache directory was empty or contained no cache files."
+    except Exception as e:
+        print(f"Error iterating cache directory {CACHE_DIR}: {e}")
+        return f"Error accessing cache directory: {e}"
+
+
+def get_cache_key(text, target_language):
+    """
+    Generate a unique cache key based ONLY on the input text and target language.
+    """
     # Use a hash to keep keys manageable
     hasher = hashlib.sha256()
     hasher.update(text.encode('utf-8'))
-    hasher.update(str(preset.get('model', '')).encode('utf-8'))
-    hasher.update(str(preset.get('temperature', '')).encode('utf-8'))
-    hasher.update(str(preset.get('api_url', '')).encode('utf-8'))
     hasher.update(target_language.encode('utf-8'))
-    hasher.update(additional_context.encode('utf-8'))
-    # Include system prompt hash? Can make cache less effective if prompts change often.
-    hasher.update(preset.get('system_prompt', '').encode('utf-8'))
     return hasher.hexdigest()
 
-def get_cached_translation(cache_key):
-    """Get a cached translation if it exists."""
-    cache = _load_cache()
+def get_cached_translation(cache_key, cache_file_path):
+    """Get a cached translation if it exists from the specific game cache file."""
+    if not cache_file_path: return None
+    cache = _load_cache(cache_file_path)
     return cache.get(cache_key)
 
-def set_cache_translation(cache_key, translation):
-    """Cache a translation result."""
-    cache = _load_cache()
+def set_cache_translation(cache_key, translation, cache_file_path):
+    """Cache a translation result to the specific game cache file."""
+    if not cache_file_path: return
+    cache = _load_cache(cache_file_path)
     cache[cache_key] = translation
-    _save_cache(cache)
+    _save_cache(cache, cache_file_path)
 
 
 def parse_translation_output(response_text, original_tag_mapping):
@@ -177,6 +236,7 @@ def parse_translation_output(response_text, original_tag_mapping):
                 print(f"Warning: Response had no tags, assuming plain text response for single ROI '{first_roi}'.")
                 parsed_segments[first_roi] = response_text.strip()
             else:
+                # Only return error if it's not a single segment plain text response
                 return {"error": f"Error: Unable to extract formatted translation.\nRaw response:\n{response_text}"}
 
 
@@ -233,12 +293,13 @@ def preprocess_text_for_translation(aggregated_text):
     return '\n'.join(preprocessed_lines), tag_mapping
 
 
-def translate_text(aggregated_input_text, preset, target_language="en", additional_context="", context_limit=10):
+def translate_text(aggregated_input_text, hwnd, preset, target_language="en", additional_context="", context_limit=10):
     """
-    Translate the given text using an OpenAI-compatible API client.
+    Translate the given text using an OpenAI-compatible API client, using game-specific caching.
 
     Args:
         aggregated_input_text: Text in "[ROI_Name]: Content" format.
+        hwnd: The window handle of the game (used for cache identification).
         preset: The translation preset configuration (LLM specific parts).
         target_language: The target language code (e.g., "en", "Spanish").
         additional_context: General instructions or context from the UI.
@@ -248,6 +309,12 @@ def translate_text(aggregated_input_text, preset, target_language="en", addition
         A dictionary mapping original ROI names to translated text,
         or {'error': message} on failure.
     """
+    # 0. Determine Cache File
+    cache_file_path = _get_cache_file_path(hwnd)
+    if not cache_file_path:
+        print("Error: Cannot proceed with translation without a valid cache file path.")
+        return {"error": "Could not determine cache file path for the game."}
+
     # 1. Preprocess input text to <|n|> format and get mapping
     preprocessed_text_for_llm, tag_mapping = preprocess_text_for_translation(aggregated_input_text)
 
@@ -255,11 +322,11 @@ def translate_text(aggregated_input_text, preset, target_language="en", addition
         print("No valid text segments found after preprocessing. Nothing to translate.")
         return {} # Return empty dict if nothing to translate
 
-    # 2. Check Cache
-    cache_key = get_cache_key(preprocessed_text_for_llm, preset, target_language, additional_context)
-    cached_result = get_cached_translation(cache_key)
+    # 2. Check Cache (Using simplified key)
+    cache_key = get_cache_key(preprocessed_text_for_llm, target_language)
+    cached_result = get_cached_translation(cache_key, cache_file_path)
     if cached_result:
-        print(f"[LOG] Using cached translation for key: {cache_key[:10]}...")
+        print(f"[LOG] Using cached translation for key: {cache_key[:10]}... from {cache_file_path.name}")
         # Ensure cache returns the expected format (roi_name -> translation)
         if isinstance(cached_result, dict) and not 'error' in cached_result:
             # Quick check: does cached result contain keys for current request?
@@ -388,8 +455,10 @@ def translate_text(aggregated_input_text, preset, target_language="en", addition
     add_context_message(current_user_message, context_limit)
     add_context_message(current_assistant_message, context_limit)
 
-    # Add to cache using the key generated earlier
-    set_cache_translation(cache_key, final_translations)
-    print(f"[LOG] Translation cached successfully.")
+    # Add to cache using the key generated earlier and the game-specific file
+    set_cache_translation(cache_key, final_translations, cache_file_path)
+    print(f"[LOG] Translation cached successfully to {cache_file_path.name}")
 
     return final_translations
+
+# --- END OF FILE utils/translation.py ---

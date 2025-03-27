@@ -1,7 +1,10 @@
+# --- START OF FILE main.py ---
+
 import tkinter as tk
 import os # Import os
 from app import VisualNovelTranslatorApp
 from pathlib import Path # For user home directory
+from utils.translation import CACHE_DIR # Import CACHE_DIR
 
 if __name__ == "__main__":
     root = tk.Tk()
@@ -22,13 +25,12 @@ if __name__ == "__main__":
         print(f"Could not set application icon: {e}")
 
     # --- Ensure required directories exist ---
-    # Cache directory (used by translation.py)
+    # Cache directory (now defined relative to app in translation.py)
     try:
-        cache_dir = Path(os.path.expanduser("~/.ocrtrans/cache"))
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        print(f"Cache directory ensured at: {cache_dir}")
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        print(f"Cache directory ensured at: {CACHE_DIR}")
     except Exception as e:
-        print(f"Warning: Could not create cache directory {cache_dir}: {e}")
+        print(f"Warning: Could not create cache directory {CACHE_DIR}: {e}")
 
     # --- Run the App ---
     try:
@@ -47,3 +49,5 @@ if __name__ == "__main__":
             messagebox.showerror("Fatal Error", f"An unexpected error occurred:\n\n{e}\n\nSee console for details.")
         except:
             pass # Ignore if even messagebox fails
+
+# --- END OF FILE main.py ---

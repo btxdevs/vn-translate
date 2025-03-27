@@ -1,9 +1,11 @@
+# --- START OF FILE ui/translation_tab.py ---
+
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 import threading
 import copy
 from ui.base import BaseTab
-from utils.translation import translate_text, clear_cache, reset_context
+from utils.translation import translate_text, clear_all_cache, clear_current_game_cache, reset_context # Updated imports
 from utils.config import save_translation_presets, load_translation_presets
 from utils.settings import get_setting, set_setting, update_settings # Import settings functions
 
@@ -260,14 +262,22 @@ class TranslationTab(BaseTab):
         action_frame = ttk.Frame(self.settings_frame)
         action_frame.pack(fill=tk.X, pady=10)
 
-        self.clear_cache_btn = ttk.Button(action_frame, text="Clear Translation Cache", command=self.clear_translation_cache)
-        self.clear_cache_btn.pack(side=tk.LEFT, padx=5)
+        # --- Cache and Context Buttons ---
+        cache_context_frame = ttk.Frame(action_frame)
+        cache_context_frame.pack(side=tk.LEFT, padx=0)
 
-        self.reset_context_btn = ttk.Button(action_frame, text="Reset Translation Context", command=self.reset_translation_context)
-        self.reset_context_btn.pack(side=tk.LEFT, padx=5)
+        self.clear_current_cache_btn = ttk.Button(cache_context_frame, text="Clear Current Game Cache", command=self.clear_current_translation_cache)
+        self.clear_current_cache_btn.pack(side=tk.TOP, padx=5, pady=2, anchor=tk.W)
 
+        self.clear_all_cache_btn = ttk.Button(cache_context_frame, text="Clear All Cache", command=self.clear_all_translation_cache)
+        self.clear_all_cache_btn.pack(side=tk.TOP, padx=5, pady=2, anchor=tk.W)
+
+        self.reset_context_btn = ttk.Button(cache_context_frame, text="Reset Translation Context", command=self.reset_translation_context)
+        self.reset_context_btn.pack(side=tk.TOP, padx=5, pady=(5,2), anchor=tk.W) # Add some top padding
+
+        # --- Translate Button ---
         self.translate_btn = ttk.Button(action_frame, text="Translate Stable Text Now", command=self.perform_translation)
-        self.translate_btn.pack(side=tk.RIGHT, padx=5)
+        self.translate_btn.pack(side=tk.RIGHT, padx=5, pady=5) # Add padding
 
         # === Auto Translation Option (Loads from general settings) ===
         auto_frame = ttk.Frame(self.settings_frame)
@@ -586,6 +596,13 @@ class TranslationTab(BaseTab):
             self.app.update_status("Translation cancelled: Configuration error.")
             return # Error message already shown
 
+        # --- Get the HWND for game-specific caching ---
+        current_hwnd = self.app.selected_hwnd
+        if not current_hwnd:
+            messagebox.showwarning("Warning", "No game window selected. Cannot determine game for caching.", parent=self.app.master)
+            self.app.update_status("Translation cancelled: No window selected.")
+            return
+
         # Get text to translate (only non-empty stable texts)
         texts_to_translate = {name: text for name, text in self.app.stable_texts.items() if text and text.strip()}
 
@@ -626,7 +643,8 @@ class TranslationTab(BaseTab):
                 # It handles caching, context, API call, and parsing <|n|> output
                 # It now returns a dictionary mapping the original ROI name to the translation
                 translated_segments = translate_text(
-                    aggregated_input_text, # Text with "[ROI_Name]: content" format
+                    aggregated_input_text=aggregated_input_text, # Text with "[ROI_Name]: content" format
+                    hwnd=current_hwnd, # Pass HWND for caching
                     preset=config, # Pass the combined config from get_translation_config
                     target_language=config["target_language"],
                     additional_context=config["additional_context"],
@@ -712,14 +730,30 @@ class TranslationTab(BaseTab):
         self.last_translation_result = None # Clear last result on error
         self.last_translation_input = None
 
-    def clear_translation_cache(self):
-        """Clear the translation cache and show confirmation."""
-        result = clear_cache()
-        messagebox.showinfo("Cache Cleared", result, parent=self.app.master)
-        self.app.update_status("Translation cache cleared.")
+    def clear_all_translation_cache(self):
+        """Clear ALL translation cache files and show confirmation."""
+        if messagebox.askyesno("Confirm Clear All Cache", "Are you sure you want to delete ALL translation cache files?", parent=self.app.master):
+            result = clear_all_cache()
+            messagebox.showinfo("Cache Cleared", result, parent=self.app.master)
+            self.app.update_status("All translation cache cleared.")
+
+    def clear_current_translation_cache(self):
+        """Clear the translation cache for the current game and show confirmation."""
+        current_hwnd = self.app.selected_hwnd
+        if not current_hwnd:
+            messagebox.showwarning("Warning", "No game window selected. Cannot clear current game cache.", parent=self.app.master)
+            return
+
+        if messagebox.askyesno("Confirm Clear Current Cache", "Are you sure you want to delete the translation cache for the currently selected game?", parent=self.app.master):
+            result = clear_current_game_cache(current_hwnd)
+            messagebox.showinfo("Cache Cleared", result, parent=self.app.master)
+            self.app.update_status("Current game translation cache cleared.")
+
 
     def reset_translation_context(self):
         """Reset the translation context history and show confirmation."""
         result = reset_context()
         messagebox.showinfo("Context Reset", result, parent=self.app.master)
         self.app.update_status("Translation context reset.")
+
+# --- END OF FILE ui/translation_tab.py ---

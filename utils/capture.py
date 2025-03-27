@@ -1,3 +1,5 @@
+# --- START OF FILE utils/capture.py ---
+
 import win32gui
 import win32ui
 import win32con
@@ -6,12 +8,15 @@ import numpy as np
 import cv2
 from ctypes import windll, byref, wintypes
 import time # For performance timing
+import win32process # For getting process ID and executable path
+import win32api # For opening process
+import os # For getting file size
 
 # Flag to reduce repetitive logging
 LOG_CAPTURE_DETAILS = False # Set to True for debugging capture methods/rects
 
 def enum_window_callback(hwnd, windows):
-    """Callback for win32gui.EnumWindows; adds visible, non-minimized windows with titles."""
+    """Callback for win32gui.EnumWindows adds visible, non-minimized windows with titles."""
     try:
         # Filter more aggressively: check style, title, visibility, parent, not minimized
         if not win32gui.IsWindowVisible(hwnd): return True
@@ -50,6 +55,66 @@ def get_window_title(hwnd):
     except Exception as e:
         # print(f"Error getting title for HWND {hwnd}: {e}") # Can be noisy
         return ""
+
+def get_executable_details(hwnd):
+    """
+    Gets the full path and size of the executable associated with the window handle.
+
+    Args:
+        hwnd: The window handle.
+
+    Returns:
+        A tuple (executable_path, file_size) or (None, None) if failed.
+    """
+    try:
+        if not hwnd or not win32gui.IsWindow(hwnd):
+            return None, None
+
+        # Get the process ID (PID) associated with the window thread
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        if not pid:
+            print(f"Could not get PID for HWND {hwnd}")
+            return None, None
+
+        # Open the process with necessary access rights
+        # PROCESS_QUERY_INFORMATION | PROCESS_VM_READ might be needed
+        # Using PROCESS_QUERY_LIMITED_INFORMATION for potentially better compatibility/security
+        process_handle = None
+        try:
+            process_handle = win32api.OpenProcess(win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        except Exception as open_err:
+            # Fallback if limited info fails (e.g., older systems or specific permissions)
+            try:
+                process_handle = win32api.OpenProcess(win32con.PROCESS_QUERY_INFORMATION | win32con.PROCESS_VM_READ, False, pid)
+            except Exception as open_err_fallback:
+                print(f"Could not open process PID {pid} for HWND {hwnd}: {open_err_fallback}")
+                return None, None
+
+        if not process_handle:
+            print(f"Failed to get handle for process PID {pid}")
+            return None, None
+
+        try:
+            # Get the executable file path
+            exe_path = win32process.GetModuleFileNameEx(process_handle, 0)
+            if not exe_path or not os.path.exists(exe_path):
+                print(f"Could not get valid executable path for PID {pid}")
+                return None, None
+
+            # Get the file size
+            file_size = os.path.getsize(exe_path)
+            return exe_path, file_size
+
+        except Exception as e:
+            print(f"Error getting module filename or size for PID {pid}: {e}")
+            return None, None
+        finally:
+            if process_handle:
+                win32api.CloseHandle(process_handle)
+
+    except Exception as e:
+        print(f"General error getting executable details for HWND {hwnd}: {e}")
+        return None, None
 
 
 def get_window_rect(hwnd):
@@ -148,7 +213,9 @@ def capture_window_direct(hwnd):
         # Try PrintWindow first (better for layered windows, DWM)
         # Flags: 0 = Full window, 1 = Client area only (use if rect_type == "Client"),
         # 2 (PW_RENDERFULLCONTENT) or 3? Docs vary. Let's stick to 0 or 1.
-        print_window_flag = 1 if rect_type == "Client" else 0
+        # PW_CLIENTONLY = 0x00000001
+        # PW_RENDERFULLCONTENT = 0x00000002 # Needed for some modern apps
+        print_window_flag = 0x1 | 0x2 if rect_type == "Client" else 0x2 # Try client + full render or just full render
 
         result = 0
         try:
@@ -308,3 +375,5 @@ def capture_window(hwnd):
         return None # Reject tiny frames?
 
     return frame
+
+# --- END OF FILE utils/capture.py ---

@@ -1,9 +1,8 @@
-from paddleocr import PaddleOCR
-
 class ROI:
     """Represents a Region of Interest for text extraction."""
     def __init__(self, name, x1, y1, x2, y2):
         self.name = name
+        # Ensure coordinates are ordered correctly
         self.x1 = min(x1, x2)
         self.y1 = min(y1, y2)
         self.x2 = max(x1, x2)
@@ -20,39 +19,30 @@ class ROI:
 
     def extract_roi(self, frame):
         """Extract the ROI region from the given frame."""
-        return frame[self.y1:self.y2, self.x1:self.x2]
-
-    def extract_text(self, frame, lang="jpn"):
-        """
-        Extract text from the ROI region in the given frame using PaddleOCR.
-        The 'lang' parameter is mapped to PaddleOCR's language codes.
-        """
         try:
-            roi_img = self.extract_roi(frame)
-            lang_map = {
-                "jpn": "japan",
-                "jpn_vert": "japan",
-                "eng": "en",
-                "chi_sim": "ch",
-                "chi_tra": "ch",
-                "kor": "ko"
-            }
-            ocr_lang = lang_map.get(lang, "en")
-            ocr = PaddleOCR(use_angle_cls=True, lang=ocr_lang, show_log=False)
-            result = ocr.ocr(roi_img, cls=True)
-
-            # Handle None result
-            if result is None:
-                return ""
-
-            text = ""
-            for line in result:
-                # Some versions of PaddleOCR may return empty lists
-                if line:
-                    for word_info in line:
-                        if word_info and len(word_info) >= 2 and word_info[1] and len(word_info[1]) >= 1:
-                            text += word_info[1][0] + " "
-            return text.strip()
+            # Ensure coordinates are integers and within frame bounds
+            h, w = frame.shape[:2]
+            y1 = max(0, int(self.y1))
+            y2 = min(h, int(self.y2))
+            x1 = max(0, int(self.x1))
+            x2 = min(w, int(self.x2))
+            if y1 >= y2 or x1 >= x2:
+                # print(f"Warning: Invalid ROI dimensions for '{self.name}' after clamping.")
+                return None # Return None if dimensions are invalid
+            return frame[y1:y2, x1:x2]
         except Exception as e:
-            print(f"Error extracting text from ROI {self.name}: {e}")
-            return ""
+            print(f"Error extracting ROI image for {self.name}: {e}")
+            return None
+
+    def get_overlay_config(self, global_settings):
+        """Gets overlay config for this ROI, merging specific settings over defaults."""
+        # Use the default structure defined in OverlayManager or OverlayTab
+        from ui.overlay_manager import OverlayManager # Avoid circular import at top level
+        defaults = OverlayManager.DEFAULT_OVERLAY_CONFIG.copy()
+
+        roi_specific_settings = global_settings.get('overlay_settings', {}).get(self.name, {})
+
+        # Merge defaults with specific settings
+        config = defaults.copy()
+        config.update(roi_specific_settings)
+        return config

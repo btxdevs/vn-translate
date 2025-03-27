@@ -1,7 +1,27 @@
 {
   "last_roi_config": "C:/Users/Jhon/Desktop/vn_translator_config.json",
-  "last_preset": null,
+  "last_preset_name": "Claude",
+  "target_language": "en",
+  "additional_context": "Context:\nThere was a small library on that island. It was the Yuugyouji family\u2019s private library built solely for one girl, Yoruko, who didn\u2019t attend school and spent all her time there. With lots of intriguing books on its shelves, there was no happier place for a bookworm like her. There were also other wonderful and pleasant people who resided there: the protagonist Ruri and his cool sharp-tongued imouto Kisaki, the freeloading tennen moodmaker Rio, and the curious and honest \u201cdetective\u201d Kanata. It\u2019s as if they were all brought together by someone or something. Their love of books was the beginning of their youth. Before long, the lonely library became full of light and they became close like childhood friends.\nTwo years later, Ruri returned to the library after leaving the island due to family matters. Nothing seemed to have changed from six years ago, except that there was a secret which they were not aware of back then: \u201cAnything that is written in the magic book will become reality\u201d. If it\u2019s a romance novel, then a miracle-like love story will unfold. If it\u2019s a fantasy novel, then vampires will appear the next day. If it\u2019s a horror novel, then there\u2019ll be a ghost beckoning you from behind.\nYoruko\u2019s strong will. Kisaki\u2019s beauty. Rio\u2019s cheerfulness. Kanata\u2019s brilliance. Let\u2019s fall in love with them and books.\n\nCharacter Names:\n- Shijou Ruri (Player Character)\n- Fushimi Rio\n- Himukai Kanata\n- Tsukiyashiro Kisaki (Sister of the protagonist)\n- Yuugyouji Yoruko\n- Chrysoberyl\n- Honjou Kanade\n- Honjou Misaki\n- Yuugyouji Nagisa\n- Yuugyouji Yamiko",
   "stable_threshold": 3,
   "max_display_width": 800,
-  "max_display_height": 600
+  "max_display_height": 600,
+  "auto_translate": true,
+  "ocr_language": "jpn",
+  "global_overlays_enabled": true,
+  "overlay_settings": {
+    "char": {
+      "enabled": true,
+      "font_family": "Segoe UI",
+      "font_size": 14,
+      "font_color": "white",
+      "bg_color": "#222222",
+      "position": "center_roi",
+      "justify": "left",
+      "wraplength": 450
+    }
+  },
+  "floating_controls_pos": "187x45+853+19",
+  "last_preset": null,
+  "translation_window_char_geometry": null
 }

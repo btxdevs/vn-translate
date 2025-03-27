@@ -1,8 +1,11 @@
+# --- START OF FILE ui/roi_tab.py ---
+
 import tkinter as tk
 from tkinter import ttk, messagebox
 from ui.base import BaseTab
 from utils.config import save_rois, load_rois
-from utils.settings import update_settings # For removing overlay settings
+# Import settings functions directly for getting config and saving removal
+from utils.settings import get_overlay_config_for_roi, update_settings, get_setting, set_setting
 import os
 
 class ROITab(BaseTab):
@@ -25,7 +28,6 @@ class ROITab(BaseTab):
         self.create_roi_btn = ttk.Button(create_frame, text="Define ROI",
                                          command=self.app.toggle_roi_selection)
         self.create_roi_btn.pack(side=tk.LEFT, padx=(5, 0), pady=(5,0))
-        # Add tooltip later if needed
 
         ttk.Label(roi_frame, text="Click 'Define ROI', then click and drag on the image preview.",
                   font=('TkDefaultFont', 8)).pack(anchor=tk.W, pady=(0, 5))
@@ -35,7 +37,6 @@ class ROITab(BaseTab):
         list_manage_frame = ttk.Frame(roi_frame)
         list_manage_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
-        # Listbox with Scrollbar
         list_frame = ttk.Frame(list_manage_frame)
         list_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
 
@@ -45,14 +46,13 @@ class ROITab(BaseTab):
         roi_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.roi_listbox = tk.Listbox(list_frame, height=6, selectmode=tk.SINGLE,
-                                      exportselection=False, # Prevent selection changing when focus moves
+                                      exportselection=False,
                                       yscrollcommand=roi_scrollbar.set)
         self.roi_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         roi_scrollbar.config(command=self.roi_listbox.yview)
         self.roi_listbox.bind("<<ListboxSelect>>", self.on_roi_selected)
 
 
-        # Management Buttons (Vertical)
         manage_btn_frame = ttk.Frame(list_manage_frame)
         manage_btn_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(5,0))
 
@@ -70,7 +70,7 @@ class ROITab(BaseTab):
 
         self.config_overlay_btn = ttk.Button(manage_btn_frame, text="Overlay...", width=8,
                                              command=self.configure_selected_overlay, state=tk.DISABLED)
-        self.config_overlay_btn.pack(pady=(5, 2), anchor=tk.N) # Moved closer
+        self.config_overlay_btn.pack(pady=(5, 2), anchor=tk.N)
 
 
         # --- Save/Load Buttons ---
@@ -97,7 +97,7 @@ class ROITab(BaseTab):
         self.move_down_btn.config(state=tk.NORMAL if has_selection and idx < num_items - 1 else tk.DISABLED)
         self.delete_roi_btn.config(state=tk.NORMAL if has_selection else tk.DISABLED)
         # Enable overlay config button only if overlay tab exists
-        can_config_overlay = has_selection and hasattr(self.app, 'overlay_tab')
+        can_config_overlay = has_selection and hasattr(self.app, 'overlay_tab') and self.app.overlay_tab.frame.winfo_exists()
         self.config_overlay_btn.config(state=tk.NORMAL if can_config_overlay else tk.DISABLED)
 
 
@@ -106,43 +106,37 @@ class ROITab(BaseTab):
         if active:
             self.create_roi_btn.config(text="Cancel Define")
             self.app.update_status("ROI selection active. Drag on preview.")
-            self.app.master.config(cursor="crosshair") # Change cursor
+            self.app.master.config(cursor="crosshair")
         else:
             self.create_roi_btn.config(text="Define ROI")
-            # Status update handled by app.toggle_roi_selection completion/cancellation
-            self.app.master.config(cursor="") # Restore default cursor
+            self.app.master.config(cursor="")
+            # Status updated by calling functions
 
 
     def update_roi_list(self):
         """Update the ROI listbox with current ROIs."""
-        # Store current selection index to try and restore it
         current_selection_index = self.roi_listbox.curselection()
         idx_to_select = current_selection_index[0] if current_selection_index else -1
 
         self.roi_listbox.delete(0, tk.END)
         for roi in self.app.rois:
-            # Maybe add an indicator if overlay is enabled? [O] ?
-            is_overlay_enabled = False
-            if hasattr(self.app, 'overlay_manager'):
-                config = self.app.overlay_manager._get_roi_config(roi.name)
-                is_overlay_enabled = config.get('enabled', False)
+            # Get config for this ROI to check if overlay is enabled
+            config = get_overlay_config_for_roi(roi.name) # Use settings utility
+            is_overlay_enabled = config.get('enabled', False)
             prefix = "[O] " if is_overlay_enabled else "[ ] "
-            self.roi_listbox.insert(tk.END, f"{prefix}{roi.name}") # Show name with overlay indicator
+            self.roi_listbox.insert(tk.END, f"{prefix}{roi.name}")
 
-        # Try to restore selection
         if 0 <= idx_to_select < self.roi_listbox.size():
             self.roi_listbox.select_set(idx_to_select)
             self.roi_listbox.activate(idx_to_select)
         elif self.roi_listbox.size() > 0:
-            idx_to_select = -1 # Reset selection if previous index invalid
-
+            idx_to_select = -1
 
         # Update the ROI list in the Overlay Tab as well
-        if hasattr(self.app, 'overlay_tab'):
+        if hasattr(self.app, 'overlay_tab') and self.app.overlay_tab.frame.winfo_exists():
             self.app.overlay_tab.update_roi_list()
 
-        # Update button states based on new selection state
-        self.on_roi_selected()
+        self.on_roi_selected() # Update button states
 
 
     def save_rois(self):
@@ -154,42 +148,43 @@ class ROITab(BaseTab):
         new_config_file = save_rois(self.app.rois, self.app.config_file)
         if new_config_file and new_config_file != self.app.config_file:
             self.app.config_file = new_config_file
+            set_setting("last_roi_config", new_config_file) # Save path to settings
             self.app.update_status(f"Saved {len(self.app.rois)} ROIs to {os.path.basename(new_config_file)}")
-            self.app.master.title(f"Visual Novel Translator - {os.path.basename(new_config_file)}") # Update title
+            self.app.master.title(f"Visual Novel Translator - {os.path.basename(new_config_file)}")
         elif new_config_file:
-            # Saved to the same file (or user cancelled but path was returned)
+            # Saved to the same file, ensure path is saved to settings too
+            set_setting("last_roi_config", new_config_file)
             self.app.update_status(f"Saved {len(self.app.rois)} ROIs to {os.path.basename(new_config_file)}")
-        # else: User cancelled, no status update needed
 
 
     def load_rois(self):
         """Load ROIs using the config utility."""
-        rois, loaded_config_file = load_rois(self.app.config_file) # Pass current as suggestion
+        # Suggest last used file from settings
+        initial_suggestion = get_setting("last_roi_config", self.app.config_file)
+        rois, loaded_config_file = load_rois(initial_suggestion)
 
-        if loaded_config_file and rois is not None: # Check success (path returned, rois not None)
+        if loaded_config_file and rois is not None:
             self.app.rois = rois
             self.app.config_file = loaded_config_file
-            self.update_roi_list()
-            self.app.overlay_manager.rebuild_overlays() # Rebuild overlays for new ROIs
+            # Important: Save the newly loaded path as the 'last_roi_config'
+            set_setting("last_roi_config", loaded_config_file)
+
+            self.update_roi_list() # Updates own list and overlay tab's list
+            if hasattr(self.app, 'overlay_manager'):
+                self.app.overlay_manager.rebuild_overlays() # Rebuild based on new ROIs
+
             self.app.update_status(f"Loaded {len(rois)} ROIs from {os.path.basename(loaded_config_file)}")
-            self.app.master.title(f"Visual Novel Translator - {os.path.basename(loaded_config_file)}") # Update title
-            # Clear stale text data associated with old ROIs
+            self.app.master.title(f"Visual Novel Translator - {os.path.basename(loaded_config_file)}")
+            # Clear stale data
             self.app.text_history = {}
             self.app.stable_texts = {}
-            self.app.text_tab.update_text({})
-            self.app.stable_text_tab.update_text({})
-            # Safely clear translation display if it exists
-            if hasattr(self.app, 'translation_tab') and self.app.translation_tab.frame.winfo_exists():
-                try:
-                    self.app.translation_tab.translation_display.config(state=tk.NORMAL)
-                    self.app.translation_tab.translation_display.delete(1.0, tk.END)
-                    self.app.translation_tab.translation_display.config(state=tk.DISABLED)
-                except tk.TclError: pass # Ignore if widget destroyed
+            if hasattr(self.app, 'text_tab'): self.app.text_tab.update_text({})
+            if hasattr(self.app, 'stable_text_tab'): self.app.stable_text_tab.update_text({})
+            if hasattr(self.app, 'translation_tab'): self.app.translation_tab.translation_display.config(state=tk.NORMAL); self.app.translation_tab.translation_display.delete(1.0, tk.END); self.app.translation_tab.translation_display.config(state=tk.DISABLED)
 
-
-        elif rois is None and loaded_config_file is None: # Explicit failure from load_rois
+        elif rois is None and loaded_config_file is None:
             self.app.update_status("ROI loading failed. See console or previous message.")
-        else: # User cancelled (rois=[], loaded_config_file=None)
+        else:
             self.app.update_status("ROI loading cancelled.")
 
 
@@ -201,13 +196,12 @@ class ROITab(BaseTab):
 
         self.app.rois[idx - 1], self.app.rois[idx] = self.app.rois[idx], self.app.rois[idx - 1]
 
-        self.update_roi_list() # Redraws listbox and updates overlay tab list
-        # Restore selection
+        self.update_roi_list()
         new_idx = idx - 1
         self.roi_listbox.select_set(new_idx)
         self.roi_listbox.activate(new_idx)
-        self.on_roi_selected() # Update button states
-        self.app.overlay_manager.rebuild_overlays() # Order might matter for some overlay logic
+        self.on_roi_selected()
+        # Order doesn't visually matter for floating overlays, no rebuild needed for move.
 
 
     def move_roi_down(self):
@@ -218,59 +212,49 @@ class ROITab(BaseTab):
 
         self.app.rois[idx], self.app.rois[idx + 1] = self.app.rois[idx + 1], self.app.rois[idx]
 
-        self.update_roi_list() # Redraws listbox and updates overlay tab list
-        # Restore selection
+        self.update_roi_list()
         new_idx = idx + 1
         self.roi_listbox.select_set(new_idx)
         self.roi_listbox.activate(new_idx)
-        self.on_roi_selected() # Update button states
-        self.app.overlay_manager.rebuild_overlays()
+        self.on_roi_selected()
+        # Order doesn't visually matter for floating overlays, no rebuild needed for move.
 
 
     def delete_selected_roi(self):
         """Delete the selected ROI."""
         selection = self.roi_listbox.curselection()
-        if not selection: return # Button should be disabled anyway
+        if not selection: return
 
         index = selection[0]
-        # Get name from listbox item (includes prefix) and strip prefix
         listbox_text = self.roi_listbox.get(index)
-        roi_name = listbox_text.split("]", 1)[-1].strip() # Get text after "[O] " or "[ ] "
+        roi_name = listbox_text.split("]", 1)[-1].strip()
 
-        # Confirm deletion
         confirm = messagebox.askyesno("Delete ROI", f"Are you sure you want to delete ROI '{roi_name}'?", parent=self.app.master)
         if not confirm: return
 
-        # Find the actual ROI object by name (safer than relying on index if list changes)
         roi_to_delete = next((roi for roi in self.app.rois if roi.name == roi_name), None)
-        if not roi_to_delete:
-            print(f"Error: Could not find ROI object for name '{roi_name}' to delete.")
-            return
+        if not roi_to_delete: return
 
-        # Remove from list
         self.app.rois.remove(roi_to_delete)
 
-        # Remove associated overlay settings (needs access to overlay_manager instance)
-        if hasattr(self.app, 'overlay_manager') and roi_name in self.app.overlay_manager.overlay_settings:
-            del self.app.overlay_manager.overlay_settings[roi_name]
-            update_settings({"overlay_settings": self.app.overlay_manager.overlay_settings}) # Save removal
+        # Remove associated overlay settings
+        all_overlay_settings = get_setting("overlay_settings", {})
+        if roi_name in all_overlay_settings:
+            del all_overlay_settings[roi_name]
+            update_settings({"overlay_settings": all_overlay_settings}) # Save removal
 
-        # Destroy the overlay window if it exists
+        # Destroy the overlay window
         if hasattr(self.app, 'overlay_manager'):
             self.app.overlay_manager.destroy_overlay(roi_name)
 
-        # Remove from text history and stable text
+        # Remove from text history/stable text
         if roi_name in self.app.text_history: del self.app.text_history[roi_name]
         if roi_name in self.app.stable_texts: del self.app.stable_texts[roi_name]
-        # Refresh displays (which will use the updated self.app.rois)
-        # Safely update text tabs if they exist
-        if hasattr(self.app, 'text_tab') and self.app.text_tab.frame.winfo_exists():
-            self.app.text_tab.update_text({}) # Update with empty dict or current?
-        if hasattr(self.app, 'stable_text_tab') and self.app.stable_text_tab.frame.winfo_exists():
-            self.app.stable_text_tab.update_text(self.app.stable_texts)
+        # Refresh displays
+        if hasattr(self.app, 'text_tab'): self.app.text_tab.update_text(self.app.text_history) # Update with current history
+        if hasattr(self.app, 'stable_text_tab'): self.app.stable_text_tab.update_text(self.app.stable_texts)
 
-
-        self.update_roi_list() # Updates listbox and overlay tab's list
+        self.update_roi_list()
         self.app.update_status(f"ROI '{roi_name}' deleted.")
 
 
@@ -279,42 +263,28 @@ class ROITab(BaseTab):
         selection = self.roi_listbox.curselection()
         if not selection: return
 
-        # Get name from listbox item (includes prefix) and strip prefix
         listbox_text = self.roi_listbox.get(selection[0])
         roi_name = listbox_text.split("]", 1)[-1].strip()
 
-        # --- Corrected Check ---
-        # Check if overlay tab and its frame widget exist
-        if not hasattr(self.app, 'overlay_tab') or not hasattr(self.app.overlay_tab, 'frame') or not self.app.overlay_tab.frame.winfo_exists():
+        if not hasattr(self.app, 'overlay_tab') or not self.app.overlay_tab.frame.winfo_exists():
             messagebox.showerror("Error", "Overlay configuration tab is not available.", parent=self.app.master)
             return
-        # --- End Correction ---
 
-        # Find the index of the Overlay tab
         try:
             overlay_tab_widget = self.app.overlay_tab.frame
-            # Find the notebook containing this frame (usually the direct master)
             notebook_widget = overlay_tab_widget.master
+            # Simplified: Assume direct parent is the notebook
             if not isinstance(notebook_widget, ttk.Notebook):
-                # If nested deeper, search upwards (less likely with current structure)
-                curr = notebook_widget.master
-                while curr and not isinstance(curr, ttk.Notebook):
-                    curr = curr.master
-                notebook_widget = curr
+                raise tk.TclError("Parent is not Notebook widget.")
 
-            if not notebook_widget or not isinstance(notebook_widget, ttk.Notebook):
-                raise tk.TclError("Could not find parent Notebook widget.")
-
-            # Select the tab using the widget itself
             notebook_widget.select(overlay_tab_widget)
 
             # Set the selected ROI in the Overlay tab's combobox
-            if roi_name in self.app.overlay_tab.roi_names:
+            if hasattr(self.app.overlay_tab, 'roi_names') and roi_name in self.app.overlay_tab.roi_names:
                 self.app.overlay_tab.selected_roi_var.set(roi_name)
-                # Load the config for this ROI in the overlay tab
-                self.app.overlay_tab.load_roi_config()
+                self.app.overlay_tab.load_roi_config() # Load config for display
             else:
-                print(f"ROI '{roi_name}' not found in Overlay Tab's list.")
+                print(f"ROI '{roi_name}' not found in Overlay Tab's list after switch.")
 
 
         except (tk.TclError, AttributeError) as e:
@@ -322,3 +292,5 @@ class ROITab(BaseTab):
             messagebox.showerror("Error", "Could not switch to Overlay configuration tab.", parent=self.app.master)
         except Exception as e:
             print(f"Unexpected error configuring overlay: {e}")
+
+# --- END OF FILE ui/roi_tab.py ---

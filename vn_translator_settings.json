@@ -18,10 +18,21 @@
       "bg_color": "#222222",
       "position": "center_roi",
       "justify": "left",
+      "wraplength": 450,
+      "geometry": "208x40+874+774"
+    },
+    "dialogue": {
+      "geometry": "794x104+883+832",
+      "enabled": true,
+      "font_family": "Segoe UI",
+      "font_size": 14,
+      "font_color": "white",
+      "bg_color": "#440002",
+      "justify": "left",
       "wraplength": 450
     }
   },
-  "floating_controls_pos": "187x45+853+19",
+  "floating_controls_pos": "869,10",
   "last_preset": null,
   "translation_window_char_geometry": null
 }

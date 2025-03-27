@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 import pyperclip # For copy functionality (install: pip install pyperclip)
 from utils.settings import get_setting, set_setting
 

@@ -2701,9 +2701,10 @@ def get_window_rect(hwnd):
 
 ```python
 import tkinter as tk
-from ui.overlay import OverlayWindow
+from ui.floating_overlay_window import OverlayWindow
 from utils.settings import get_setting, set_setting, update_settings
-import win32gui # To check game window validity
+import win32gui  # To check game window validity
+
 
 class OverlayManager:
     """Manages multiple OverlayWindow instances."""
@@ -2711,23 +2712,23 @@ class OverlayManager:
     # Default configuration applied if no specific setting exists for an ROI
     DEFAULT_OVERLAY_CONFIG = {
         "enabled": True,
-        "font_family": "Segoe UI", # Default modern font
+        "font_family": "Segoe UI",  # Default modern font
         "font_size": 14,
         "font_color": "white",
-        "bg_color": "#222222", # Dark grey background
-        "alpha": 0.85, # Transparency level (used by OverlayWindow if applicable)
-        "position": "bottom_roi", # Default position relative to ROI
-        "wraplength": 450, # Max width in pixels before text wraps
-        "justify": "left" # Text alignment (left, center, right)
+        "bg_color": "#222222",  # Dark grey background
+        "alpha": 0.85,  # Transparency level (used by OverlayWindow if applicable)
+        "position": "bottom_roi",  # Default position relative to ROI
+        "wraplength": 450,  # Max width in pixels before text wraps
+        "justify": "left"  # Text alignment (left, center, right)
     }
 
     def __init__(self, master, app_ref):
         self.master = master
-        self.app = app_ref # Reference to the main application
+        self.app = app_ref  # Reference to the main application
         self.overlays = {}  # roi_name: OverlayWindow instance
         # Load global enabled state and individual ROI settings from persistent storage
         self.global_overlays_enabled = get_setting("global_overlays_enabled", True)
-        self.overlay_settings = get_setting("overlay_settings", {}) # roi_name: config_dict
+        self.overlay_settings = get_setting("overlay_settings", {})  # roi_name: config_dict
 
     def _get_roi_config(self, roi_name):
         """Gets the specific config for an ROI, merging with defaults."""
@@ -2749,8 +2750,8 @@ class OverlayManager:
 
         # Check if game window is valid before creating
         if not self.app.selected_hwnd or not win32gui.IsWindow(self.app.selected_hwnd):
-             # print(f"Cannot create overlay for {roi_name}: Invalid game window.")
-             return # Silently fail if no valid game window
+            # print(f"Cannot create overlay for {roi_name}: Invalid game window.")
+            return  # Silently fail if no valid game window
 
         config = self._get_roi_config(roi_name)
 
@@ -2764,10 +2765,9 @@ class OverlayManager:
             except Exception as e:
                 print(f"Error creating overlay window for {roi_name}: {e}")
         else:
-             # Don't print spam if intentionally disabled
-             # print(f"Overlay creation skipped for {roi_name} (Globally Enabled: {self.global_overlays_enabled}, ROI Enabled: {config.get('enabled', True)})")
-             pass
-
+            # Don't print spam if intentionally disabled
+            # print(f"Overlay creation skipped for {roi_name} (Globally Enabled: {self.global_overlays_enabled}, ROI Enabled: {config.get('enabled', True)})")
+            pass
 
     def update_overlay(self, roi_name, text):
         """Updates the text and position of a specific overlay."""
@@ -2785,16 +2785,15 @@ class OverlayManager:
                 # Position update is handled within update_text -> update_position_if_needed
                 # overlay.update_position_if_needed(roi_rect_in_game_coords=roi_rect) # Pass coords here
             else:
-                 # If ROI object not found (e.g., deleted but overlay not yet destroyed?), just update text
-                 overlay.update_text(text)
-                 # Cannot update position accurately without ROI coords
-                 overlay.update_position_if_needed() # Use fallback position
-
+                # If ROI object not found (e.g., deleted but overlay not yet destroyed?), just update text
+                overlay.update_text(text)
+                # Cannot update position accurately without ROI coords
+                overlay.update_position_if_needed()  # Use fallback position
 
     def update_overlays(self, translated_segments):
         """Updates all relevant overlays based on the translation results dictionary."""
         if not self.global_overlays_enabled:
-            self.hide_all_overlays() # Ensure all are hidden if globally disabled
+            self.hide_all_overlays()  # Ensure all are hidden if globally disabled
             return
 
         # Get all current ROI names
@@ -2813,22 +2812,21 @@ class OverlayManager:
             # Get the translated text, default to empty string if none provided
             text_to_display = translated_segments.get(roi_name, "")
 
-            if roi and is_roi_enabled: # If the ROI exists and should be displayed
-                 if not overlay_exists:
-                      # Create overlay if it's missing but should be shown
-                      print(f"Recreating missing overlay for enabled ROI: {roi_name}")
-                      self.create_overlay_for_roi(roi) # Create it
-                      overlay_exists = roi_name in self.overlays # Check again
+            if roi and is_roi_enabled:  # If the ROI exists and should be displayed
+                if not overlay_exists:
+                    # Create overlay if it's missing but should be shown
+                    print(f"Recreating missing overlay for enabled ROI: {roi_name}")
+                    self.create_overlay_for_roi(roi)  # Create it
+                    overlay_exists = roi_name in self.overlays  # Check again
 
-                 if overlay_exists:
-                      # Update the overlay with text (handles show/hide internally)
-                      self.update_overlay(roi_name, text_to_display)
+                if overlay_exists:
+                    # Update the overlay with text (handles show/hide internally)
+                    self.update_overlay(roi_name, text_to_display)
 
             elif overlay_exists:
-                 # If ROI is disabled or deleted, ensure overlay is hidden/destroyed
-                 print(f"Hiding/Destroying overlay for disabled/deleted ROI: {roi_name}")
-                 self.destroy_overlay(roi_name) # Destroy might be cleaner
-
+                # If ROI is disabled or deleted, ensure overlay is hidden/destroyed
+                print(f"Hiding/Destroying overlay for disabled/deleted ROI: {roi_name}")
+                self.destroy_overlay(roi_name)  # Destroy might be cleaner
 
     def clear_all_overlays(self):
         """Clears text from all managed overlays (hides them)."""
@@ -2852,10 +2850,9 @@ class OverlayManager:
                 # Find ROI for position update
                 roi = next((r for r in self.app.rois if r.name == roi_name), None)
                 roi_rect = (roi.x1, roi.y1, roi.x2, roi.y2) if roi else None
-                overlay.update_position_if_needed(roi_rect) # Recalc position
+                overlay.update_position_if_needed(roi_rect)  # Recalc position
                 overlay.deiconify()
                 overlay.lift()
-
 
     def destroy_overlay(self, roi_name):
         """Destroys a specific overlay window."""
@@ -2867,7 +2864,6 @@ class OverlayManager:
             del self.overlays[roi_name]
             print(f"Destroyed overlay for ROI: {roi_name}")
 
-
     def destroy_all_overlays(self):
         """Destroys all managed overlay windows."""
         names = list(self.overlays.keys())
@@ -2877,16 +2873,15 @@ class OverlayManager:
         self.overlays = {}
         print("Destroyed all overlays.")
 
-
     def rebuild_overlays(self):
         """Destroys and recreates all overlays based on current ROIs and settings."""
         print("Rebuilding overlays...")
         self.destroy_all_overlays()
         if not self.global_overlays_enabled:
-             print("Skipping overlay creation as globally disabled.")
-             return
+            print("Skipping overlay creation as globally disabled.")
+            return
         for roi in self.app.rois:
-            self.create_overlay_for_roi(roi) # Creates only if enabled
+            self.create_overlay_for_roi(roi)  # Creates only if enabled
 
     def update_overlay_config(self, roi_name, new_partial_config):
         """Updates the config for a specific overlay and saves it."""
@@ -2899,9 +2894,9 @@ class OverlayManager:
 
         # Save updated settings persistently
         if update_settings({"overlay_settings": self.overlay_settings}):
-             print(f"Overlay settings saved for {roi_name}.")
+            print(f"Overlay settings saved for {roi_name}.")
         else:
-             print(f"Error saving overlay settings for {roi_name}.")
+            print(f"Error saving overlay settings for {roi_name}.")
 
         # Apply changes to the live overlay if it exists
         if roi_name in self.overlays:
@@ -2909,32 +2904,31 @@ class OverlayManager:
             live_config = self._get_roi_config(roi_name)
             self.overlays[roi_name].update_config(live_config)
         elif new_partial_config.get('enabled', False) and self.global_overlays_enabled:
-             # If overlay was disabled but now enabled, try to create it
-             roi = next((r for r in self.app.rois if r.name == roi_name), None)
-             if roi:
-                  print(f"Creating overlay for {roi_name} as it was enabled.")
-                  self.create_overlay_for_roi(roi)
-
+            # If overlay was disabled but now enabled, try to create it
+            roi = next((r for r in self.app.rois if r.name == roi_name), None)
+            if roi:
+                print(f"Creating overlay for {roi_name} as it was enabled.")
+                self.create_overlay_for_roi(roi)
 
     def set_global_overlays_enabled(self, enabled):
         """Sets the global enable state, saves it, and shows/hides overlays."""
         if enabled == self.global_overlays_enabled:
-            return # No change
+            return  # No change
 
         self.global_overlays_enabled = enabled
-        set_setting("global_overlays_enabled", enabled) # Save setting
+        set_setting("global_overlays_enabled", enabled)  # Save setting
 
         if enabled:
-             print("Global overlays enabled. Rebuilding...")
-             self.rebuild_overlays() # Recreate overlays respecting individual configs
-             # Optionally restore last text? Needs storing last text per overlay.
+            print("Global overlays enabled. Rebuilding...")
+            self.rebuild_overlays()  # Recreate overlays respecting individual configs
+            # Optionally restore last text? Needs storing last text per overlay.
         else:
-             print("Global overlays disabled. Hiding all.")
-             self.hide_all_overlays()
+            print("Global overlays disabled. Hiding all.")
+            self.hide_all_overlays()
 
         # Update floating controls state if they exist
         if self.app.floating_controls and self.app.floating_controls.winfo_exists():
-             self.app.floating_controls.overlay_var.set(enabled)
+            self.app.floating_controls.overlay_var.set(enabled)
 ```
 
 --- END OF FILE ui/overlay_manager.py ---

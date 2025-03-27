@@ -9,7 +9,7 @@ SETTINGS_FILE = "vn_translator_settings.json"
 # Default settings
 DEFAULT_SETTINGS = {
     "last_roi_config": "vn_translator_config.json",
-    "last_preset_name": None, # Store the name of the last used preset
+    "last_preset_name": None,
     "target_language": "en",
     "additional_context": "",
     "stable_threshold": 3,
@@ -18,25 +18,24 @@ DEFAULT_SETTINGS = {
     "auto_translate": False,
     "ocr_language": "jpn",
     "global_overlays_enabled": True,
-    "overlay_settings": {}, # roi_name: {enabled: bool, font_size: int, ..., geometry: "WxH+X+Y" or None}
-    "floating_controls_pos": None # "x,y"
+    "overlay_settings": {}, # roi_name: {config dict}
+    "floating_controls_pos": None
 }
 
-# Default values for a single overlay's settings within overlay_settings[roi_name]
-# This structure will be merged with saved settings for each ROI.
+# Default values for a single overlay's settings
 DEFAULT_SINGLE_OVERLAY_CONFIG = {
     "enabled": True,
     "font_family": "Segoe UI",
     "font_size": 14,
     "font_color": "white",
     "bg_color": "#222222",
-    # "alpha": 0.85, # No longer used directly by the window for transparency
-    # "position": "bottom_roi", # No longer used, user controls position/size
+    "alpha": 1.0, # Added: Default 1.0 (fully opaque)
     "wraplength": 450,
     "justify": "left",
-    "geometry": None # Holds "WxH+X+Y", default is None (auto-size/center)
+    "geometry": None
 }
 
+# --- load_settings, save_settings, get_setting, set_setting, update_settings remain the same ---
 
 def load_settings():
     """Load application settings."""
@@ -45,8 +44,6 @@ def load_settings():
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 loaded_settings = json.load(f)
-            # Deep merge for overlay_settings? No, just update the top level.
-            # The manager will handle merging defaults for individual ROIs.
             settings.update(loaded_settings)
         except Exception as e:
             print(f"Error loading settings: {e}. Using defaults.")
@@ -66,7 +63,6 @@ def save_settings(settings):
 def get_setting(key, default=None):
     """Get a specific setting value."""
     settings = load_settings()
-    # Use default from DEFAULT_SETTINGS if key exists there, otherwise use passed default
     fallback_default = DEFAULT_SETTINGS.get(key, default)
     return settings.get(key, fallback_default)
 
@@ -82,7 +78,9 @@ def update_settings(new_values):
     settings.update(new_values)
     return save_settings(settings)
 
-# Function to get merged config for a single ROI, combining defaults and saved specifics
+
+# --- get_overlay_config_for_roi, save_overlay_config_for_roi remain the same ---
+
 def get_overlay_config_for_roi(roi_name):
     """Gets the specific config for an ROI, merging with defaults."""
     config = DEFAULT_SINGLE_OVERLAY_CONFIG.copy()
@@ -91,13 +89,20 @@ def get_overlay_config_for_roi(roi_name):
     config.update(roi_specific_saved)
     return config
 
-# Function to save the config for a single ROI
 def save_overlay_config_for_roi(roi_name, new_partial_config):
     """Updates and saves the config for a specific overlay ROI."""
     all_overlay_settings = get_setting("overlay_settings", {})
     if roi_name not in all_overlay_settings:
         all_overlay_settings[roi_name] = {}
-    all_overlay_settings[roi_name].update(new_partial_config)
+    # Ensure geometry is saved even if None
+    if 'geometry' in new_partial_config:
+        all_overlay_settings[roi_name]['geometry'] = new_partial_config['geometry']
+    # Update other keys
+    for key, value in new_partial_config.items():
+        if key != 'geometry': # Avoid overwriting None geometry if not explicitly passed
+            all_overlay_settings[roi_name][key] = value
+
     return update_settings({"overlay_settings": all_overlay_settings})
+
 
 # --- END OF FILE utils/settings.py ---

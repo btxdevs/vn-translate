@@ -2,7 +2,7 @@
   "last_roi_config": "C:/Users/Jhon/Desktop/vn_translator_config.json",
   "last_preset_name": "Claude",
   "target_language": "en",
-  "additional_context": "Context:\nThere was a small library on that island. It was the Yuugyouji family\u2019s private library built solely for one girl, Yoruko, who didn\u2019t attend school and spent all her time there. With lots of intriguing books on its shelves, there was no happier place for a bookworm like her. There were also other wonderful and pleasant people who resided there: the protagonist Ruri and his cool sharp-tongued imouto Kisaki, the freeloading tennen moodmaker Rio, and the curious and honest \u201cdetective\u201d Kanata. It\u2019s as if they were all brought together by someone or something. Their love of books was the beginning of their youth. Before long, the lonely library became full of light and they became close like childhood friends.\nTwo years later, Ruri returned to the library after leaving the island due to family matters. Nothing seemed to have changed from six years ago, except that there was a secret which they were not aware of back then: \u201cAnything that is written in the magic book will become reality\u201d. If it\u2019s a romance novel, then a miracle-like love story will unfold. If it\u2019s a fantasy novel, then vampires will appear the next day. If it\u2019s a horror novel, then there\u2019ll be a ghost beckoning you from behind.\nYoruko\u2019s strong will. Kisaki\u2019s beauty. Rio\u2019s cheerfulness. Kanata\u2019s brilliance. Let\u2019s fall in love with them and books.\n\nCharacter Names:\n- Shijou Ruri (Player Character)\n- Fushimi Rio\n- Himukai Kanata\n- Tsukiyashiro Kisaki (Sister of the protagonist)\n- Yuugyouji Yoruko\n- Chrysoberyl\n- Honjou Kanade\n- Honjou Misaki\n- Yuugyouji Nagisa\n- Yuugyouji Yamiko",
+  "additional_context": "Context:\nThere was a small library on that island. It was the Yuugyouji family\u2019s private library built solely for one girl, Yoruko, who didn\u2019t attend school and spent all her time there. With lots of intriguing books on its shelves, there was no happier place for a bookworm like her. There were also other wonderful and pleasant people who resided there: the protagonist Ruri and his cool sharp-tongued imouto Kisaki, the freeloading tennen moodmaker Rio, and the curious and honest \u201cdetective\u201d Kanata. It\u2019s as if they were all brought together by someone or something. Their love of books was the beginning of their youth. Before long, the lonely library became full of light and they became close like childhood friends.\nTwo years later, Ruri returned to the library after leaving the island due to family matters. Nothing seemed to have changed from six years ago, except that there was a secret which they were not aware of back then: \u201cAnything that is written in the magic book will become reality\u201d. If it\u2019s a romance novel, then a miracle-like love story will unfold. If it\u2019s a fantasy novel, then vampires will appear the next day. If it\u2019s a horror novel, then there\u2019ll be a ghost beckoning you from behind.\nYoruko\u2019s strong will. Kisaki\u2019s beauty. Rio\u2019s cheerfulness. Kanata\u2019s brilliance. Let\u2019s fall in love with them and books.\n\nCharacter Names:\n- Shijou Ruri \u56db\u689d \u7460\u7483 (Player Character) (M)\n- Fushimi Rio \u4f0f\u898b \u7406\u592e (F)\n- Himukai Kanata \u65e5\u5411 \u304b\u306a\u305f (F)\n- Tsukiyashiro Kisaki \u6708\u793e \u5983 (Sister of the protagonist) (F)\n- Yuugyouji Yoruko \u904a\u884c\u5bfa \u591c\u5b50 (F)\n- Chrysoberyl \u30af\u30ea\u30bd\u30d9\u30ea\u30eb (F)\n- Honjou Kanade \u672c\u57ce \u594f (F)\n- Honjou Misaki \u672c\u57ce \u5cac (F)\n- Yuugyouji Nagisa \u904a\u884c\u5bfa \u6c40 (M)\n- Yuugyouji Yamiko \u904a\u884c\u5bfa \u95c7\u5b50 (F)",
   "stable_threshold": 3,
   "max_display_width": 800,
   "max_display_height": 600,
@@ -15,24 +15,26 @@
       "font_family": "Segoe UI",
       "font_size": 14,
       "font_color": "white",
-      "bg_color": "#222222",
+      "bg_color": "#222",
       "position": "center_roi",
       "justify": "left",
       "wraplength": 450,
-      "geometry": "208x40+874+774"
+      "geometry": "208x40+874+774",
+      "alpha": 1.0
     },
     "dialogue": {
-      "geometry": "794x104+883+832",
+      "geometry": "794x104+832+844",
       "enabled": true,
       "font_family": "Segoe UI",
       "font_size": 14,
       "font_color": "white",
-      "bg_color": "#440002",
+      "bg_color": "#222",
       "justify": "left",
-      "wraplength": 450
+      "wraplength": 450,
+      "alpha": 1.0
     }
   },
-  "floating_controls_pos": "869,10",
+  "floating_controls_pos": "918,120",
   "last_preset": null,
   "translation_window_char_geometry": null
 }

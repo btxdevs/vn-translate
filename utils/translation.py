@@ -147,15 +147,13 @@ def translate_text(text, preset, target_language="en", additional_context=""):
         print(f"[LOG] Using cached translation")
         return cached
 
-    # Prepare system message with additional context if provided
+    # Prepare system message without additional context
     system_content = (
         f"{preset['system_prompt']}\n\n"
         "IMPORTANT: Maintain the exact same segment numbering as in the input. "
         "Do NOT split sentences into multiple segments or create new segments. "
         "Always translate each <|n|> segment as a complete unit."
     )
-    if additional_context.strip():
-        system_content += f"\n\nAdditional Context: {additional_context.strip()}"
 
     # Build message history with example formatting
     messages = [{"role": "system", "content": system_content}]
@@ -192,14 +190,18 @@ def translate_text(text, preset, target_language="en", additional_context=""):
         for msg in context_messages:
             messages.append(msg)
 
-    # Add current translation request
-    user_message = (
-        f"Translate the following text to {target_language}. "
-        f"Each segment must keep its original numbering:\n\n{preprocessed_text}\n\n"
-        "Respond using EXACTLY the same segment numbers. "
-        "Do NOT split sentences into multiple segments. "
-        "Format each segment as: <|n|> translated_text"
-    )
+    # Add current translation request with additional context at the beginning
+    user_message = f"Translate the following text to {target_language}."
+
+    # Add additional context directly at the beginning without a prefix
+    if additional_context.strip():
+        user_message = additional_context.strip() + "\n\n" + user_message
+
+    user_message += (f"\n\nEach segment must keep its original numbering:\n\n{preprocessed_text}\n\n"
+                     "Respond using EXACTLY the same segment numbers. "
+                     "Do NOT split sentences into multiple segments. "
+                     "Format each segment as: <|n|> translated_text")
+
     messages.append({"role": "user", "content": user_message})
     add_context({"role": "user", "content": user_message}, preset.get("context_limit", 10))
 

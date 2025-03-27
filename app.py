@@ -202,62 +202,118 @@ class VisualNovelTranslatorApp:
                 self.capture_tab.on_live_view_resumed()
 
     def capture_process(self):
-        """Background thread for continuous window capture."""
-        start_time = time.time()
+        """Background thread for continuous window capture with reduced flickering."""
+        last_frame_time = time.time()
+        redraw_interval = 1.0 / FPS  # Limit redraws to FPS
+
         while self.capturing:
             try:
+                # Skip processing if using snapshot
                 if self.using_snapshot:
                     time.sleep(FRAME_DELAY)
                     continue
 
+                # Capture new frame
                 frame = capture_window(self.selected_hwnd)
                 if frame is None:
                     self.capture_tab.update_status("Window closed or cannot capture.")
                     self.capturing = False
                     break
 
+                # Store the current frame
                 self.current_frame = frame.copy()
-                self._display_frame(frame)
 
+                # Process ROIs in the background
                 if self.rois:
                     self._process_rois()
 
-                elapsed = time.time() - start_time
-                sleep_time = FRAME_DELAY - elapsed if FRAME_DELAY - elapsed > 0 else 0
+                # Only update display at FPS rate
+                current_time = time.time()
+                if current_time - last_frame_time >= redraw_interval:
+                    # Use after() to update UI from main thread
+                    self.master.after_idle(lambda f=frame: self._display_frame(f))
+                    last_frame_time = current_time
+
+                # Calculate sleep time for next frame
+                elapsed = time.time() - current_time
+                sleep_time = max(0, FRAME_DELAY - elapsed)
                 time.sleep(sleep_time)
-                start_time = time.time()
+
             except Exception as e:
                 print(f"Capture error: {e}")
                 self.capture_tab.update_status(f"Error during capture: {str(e)}")
                 self.capturing = False
                 break
 
+        # Notify UI thread that capture has stopped
         self.master.after(0, self.capture_tab.on_capture_stopped)
 
     def _display_frame(self, frame):
-        """Display a frame on the canvas."""
+        """Display a frame on the canvas, centered and fit horizontally with reduced flickering."""
         if frame is None:
             return
 
+        # Get frame dimensions
         frame_height, frame_width = frame.shape[:2]
-        scale = min(self.max_display_width / frame_width, self.max_display_height / frame_height)
+
+        # Get current canvas dimensions
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+
+        # Use default dimensions if canvas isn't ready yet
+        if canvas_width <= 1:
+            canvas_width = self.max_display_width
+        if canvas_height <= 1:
+            canvas_height = self.max_display_height
+
+        # Calculate scale to fit the frame within the canvas
+        scale = min(canvas_width / frame_width, canvas_height / frame_height)
         new_width = int(frame_width * scale)
         new_height = int(frame_height * scale)
 
+        # Store scale for ROI calculations
         self.scale_x = scale
         self.scale_y = scale
 
+        # Calculate position to center the image
+        x_position = max(0, (canvas_width - new_width) // 2)
+        y_position = max(0, (canvas_height - new_height) // 2)
+
+        # Store positioning information
+        self.frame_x_offset = x_position
+        self.frame_y_offset = y_position
+        self.frame_width = new_width
+        self.frame_height = new_height
+
+        # Only resize and convert if necessary
         display_frame = cv2.resize(frame, (new_width, new_height))
         display_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
 
+        # Update the PhotoImage
         img = Image.fromarray(display_frame)
         img_tk = ImageTk.PhotoImage(image=img)
 
-        self.canvas.config(width=new_width, height=new_height)
-        self.canvas.create_image(0, 0, anchor=tk.NW, image=img_tk)
+        # If we already have an image on the canvas, just configure it
+        canvas_img = self.canvas.find_withtag("display_image")
+        if not canvas_img:
+            # First time - create the image
+            self.canvas.delete("all")
+            self.canvas.create_image(
+                x_position, y_position,
+                anchor=tk.NW,
+                image=img_tk,
+                tags=("display_image",)
+            )
+        else:
+            # Update existing image
+            self.canvas.itemconfig("display_image", image=img_tk)
+            self.canvas.coords("display_image", x_position, y_position)
+
+        # Keep a reference to prevent garbage collection
         self.canvas.image = img_tk
 
-        self._draw_rois()
+        # Draw ROIs
+        self._draw_rois(x_position, y_position)
 
     def _process_rois(self):
         """Process all ROIs in the current frame to extract text."""
@@ -317,17 +373,17 @@ class VisualNovelTranslatorApp:
         if stable_text_changed and hasattr(self, 'translation_tab') and self.translation_tab.is_auto_translate_enabled():
             self.master.after(0, self.translation_tab.perform_translation)
 
-    def _draw_rois(self):
-        """Draw ROI rectangles on the canvas."""
+    def _draw_rois(self, x_offset=0, y_offset=0):
+        """Draw ROI rectangles on the canvas with offset for centering."""
         for i in range(len(self.rois)):
             self.canvas.delete(f"roi_{i}")
             self.canvas.delete(f"roi_label_{i}")
 
         for i, roi in enumerate(self.rois):
-            x1 = int(roi.x1 * self.scale_x)
-            y1 = int(roi.y1 * self.scale_y)
-            x2 = int(roi.x2 * self.scale_x)
-            y2 = int(roi.y2 * self.scale_y)
+            x1 = int(roi.x1 * self.scale_x) + x_offset
+            y1 = int(roi.y1 * self.scale_y) + y_offset
+            x2 = int(roi.x2 * self.scale_x) + x_offset
+            y2 = int(roi.y2 * self.scale_y) + y_offset
 
             self.canvas.create_rectangle(x1, y1, x2, y2, outline="green", width=2, tags=f"roi_{i}")
             self.canvas.create_text(x1+5, y1+5, text=roi.name, fill="lime", anchor=tk.NW, tags=f"roi_label_{i}")
@@ -337,6 +393,22 @@ class VisualNovelTranslatorApp:
         if not self.roi_selection_active:
             return
 
+        # Get canvas dimensions to calculate center offsets
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+
+        # Calculate the image position
+        frame_width = int(self.current_frame.shape[1] * self.scale_x) if self.current_frame is not None else 0
+        frame_height = int(self.current_frame.shape[0] * self.scale_y) if self.current_frame is not None else 0
+
+        x_offset = max(0, (canvas_width - frame_width) // 2)
+        y_offset = max(0, (canvas_height - frame_height) // 2)
+
+        # Ignore clicks outside the image area
+        if (event.x < x_offset or event.x >= x_offset + frame_width or
+                event.y < y_offset or event.y >= y_offset + frame_height):
+            return
+
         self.roi_start_x = event.x
         self.roi_start_y = event.y
         self.roi_rect = self.canvas.create_rectangle(
@@ -344,6 +416,10 @@ class VisualNovelTranslatorApp:
             self.roi_start_x, self.roi_start_y,
             outline="red", width=2
         )
+
+        # Store offsets for use in mouse_up
+        self.x_offset = x_offset
+        self.y_offset = y_offset
 
     def on_mouse_drag(self, event):
         """Handle mouse drag for ROI selection."""
@@ -367,6 +443,19 @@ class VisualNovelTranslatorApp:
         roi_name = self.roi_tab.roi_name_entry.get().strip()
         if not roi_name:
             roi_name = f"roi_{len(self.rois) + 1}"
+
+        # Apply offsets to get coordinates relative to the image
+        x_offset = getattr(self, 'x_offset', 0)
+        y_offset = getattr(self, 'y_offset', 0)
+
+        x1 -= x_offset
+        y1 -= y_offset
+        x2 -= x_offset
+        y2 -= y_offset
+
+        # Ensure coordinates are within image bounds
+        if x1 < 0: x1 = 0
+        if y1 < 0: y1 = 0
 
         orig_x1 = int(x1 / self.scale_x)
         orig_y1 = int(y1 / self.scale_y)

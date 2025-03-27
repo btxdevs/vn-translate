@@ -1,3 +1,5 @@
+# --- START OF FILE app.py ---
+
 import tkinter as tk
 from tkinter import ttk, messagebox
 import threading
@@ -82,7 +84,7 @@ class VisualNovelTranslatorApp:
         self._resize_job = None
 
         # --- Setup UI ---
-        self._setup_ui()
+        self._setup_ui() # Calls the modified method
 
         # --- Initialize Managers ---
         self.overlay_manager = OverlayManager(self.master, self)  # Still needed
@@ -95,11 +97,32 @@ class VisualNovelTranslatorApp:
         initial_ocr_lang = self.ocr_lang or "jpn"
         self.update_ocr_engine(initial_ocr_lang, initial_load=True)
 
-        # --- Show Floating Controls ---
+        # --- Show Floating Controls (Initial show) ---
         self.show_floating_controls()
 
     def _setup_ui(self):
         """Set up the main UI layout and tabs."""
+
+        # --- ADD MENU BAR ---
+        menu_bar = tk.Menu(self.master)
+        self.master.config(menu=menu_bar)
+
+        # Create "File" menu (optional, example)
+        file_menu = tk.Menu(menu_bar, tearoff=0)
+        menu_bar.add_cascade(label="File", menu=file_menu)
+        # Check if roi_tab exists before adding menu commands that use it
+        # This can be deferred or checked lazily, but adding now with a placeholder is okay
+        file_menu.add_command(label="Load ROI Config...", command=lambda: self.roi_tab.load_rois() if hasattr(self, 'roi_tab') else None)
+        file_menu.add_command(label="Save ROI Config As...", command=lambda: self.roi_tab.save_rois() if hasattr(self, 'roi_tab') else None)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.on_close)
+
+        # Create "Window" menu
+        window_menu = tk.Menu(menu_bar, tearoff=0)
+        menu_bar.add_cascade(label="Window", menu=window_menu)
+        window_menu.add_command(label="Show Floating Controls", command=self.show_floating_controls)
+        # --- END OF MENU BAR ADDITION ---
+
         self.paned_window = ttk.PanedWindow(self.master, orient=tk.HORIZONTAL)
         self.paned_window.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
@@ -343,6 +366,13 @@ class VisualNovelTranslatorApp:
         self._display_frame(self.current_frame if self.current_frame is not None else None)
         if hasattr(self, "capture_tab"):
             self.capture_tab.on_live_view_resumed()
+        # Update status based on whether capture is still running
+        if self.capturing:
+            title = get_window_title(self.selected_hwnd) or f"HWND {self.selected_hwnd}"
+            self.update_status(f"Capturing: {title}")
+        else:
+            self.update_status("Capture stopped.")
+
 
     def toggle_roi_selection(self):
         """Enable or disable ROI selection mode."""
@@ -372,6 +402,9 @@ class VisualNovelTranslatorApp:
             self.roi_draw_rect_id = None
             self.roi_start_coords = None
             self.update_status("ROI selection cancelled.")
+            # If cancelled while in snapshot mode, return to live
+            if self.using_snapshot:
+                self.return_to_live()
 
     def capture_process(self):
         """Background thread for capture and processing."""
@@ -644,6 +677,11 @@ class VisualNovelTranslatorApp:
                     pass
             self.roi_draw_rect_id = None
             self.roi_start_coords = None
+            # --- If user cancelled or drew too small, we might still be in snapshot mode ---
+            # --- Decide if we should return to live even on failure/cancel ---
+            # --- Current logic returns to live only on SUCCESSFUL ROI creation ---
+            # if self.using_snapshot: # Optionally return even on cancel?
+            #     self.return_to_live()
             return
 
         try:
@@ -662,7 +700,11 @@ class VisualNovelTranslatorApp:
             self.roi_tab.on_roi_selection_toggled(False)
 
         if coords is None or len(coords) != 4:
+            # If coords are invalid, return to live if we were in snapshot mode
+            if self.using_snapshot:
+                self.return_to_live()
             return
+
         x1d, y1d, x2d, y2d = map(int, coords)
         min_size = 5
         if abs(x2d - x1d) < min_size or abs(y2d - y1d) < min_size:
@@ -671,6 +713,9 @@ class VisualNovelTranslatorApp:
                 f"Selected region too small (min {min_size}x{min_size} px).",
                 parent=self.master,
             )
+            # Return to live even if ROI was too small
+            if self.using_snapshot:
+                self.return_to_live()
             return
 
         roi_name = self.roi_tab.roi_name_entry.get().strip()
@@ -683,9 +728,13 @@ class VisualNovelTranslatorApp:
                 roi_name = f"roi_{i}"
         elif roi_name in [r.name for r in self.rois]:
             if not messagebox.askyesno("ROI Exists", f"Overwrite ROI '{roi_name}'?", parent=self.master):
+                # User cancelled overwrite, return to live
+                if self.using_snapshot:
+                    self.return_to_live()
                 return
             overwrite_name = roi_name
 
+        # ... (rest of the coordinate calculations ox, oy, rx1, etc.) ...
         ox, oy = self.frame_display_coords["x"], self.frame_display_coords["y"]
         img_w, img_h = self.frame_display_coords["w"], self.frame_display_coords["h"]
         rx1 = min(x1d, x2d) - ox
@@ -701,9 +750,15 @@ class VisualNovelTranslatorApp:
             messagebox.showwarning(
                 "ROI Too Small", "Effective region too small after clamping.", parent=self.master
             )
+            # Return to live even if ROI was too small
+            if self.using_snapshot:
+                self.return_to_live()
             return
 
         if self.scale_x == 0 or self.scale_y == 0:
+            # Return to live if scale is invalid
+            if self.using_snapshot:
+                self.return_to_live()
             return  # Avoid division by zero
         ox1 = int(crx1 / self.scale_x)
         oy1 = int(cry1 / self.scale_y)
@@ -744,6 +799,12 @@ class VisualNovelTranslatorApp:
 
         if hasattr(self, "overlay_manager"):
             self.overlay_manager.create_overlay_for_roi(new_roi)
+
+        # <<< --- ADD THIS LINE --- >>>
+        if self.using_snapshot:
+            self.return_to_live()
+        # <<< --- END OF ADDITION --- >>>
+
 
     def show_floating_controls(self):
         """Creates/shows the floating control window."""
@@ -806,3 +867,5 @@ class VisualNovelTranslatorApp:
             pass
         except Exception as e:
             print(f"Error during final destruction: {e}")
+
+# --- END OF FILE app.py ---

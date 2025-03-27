@@ -8,33 +8,19 @@
   "max_display_height": 600,
   "auto_translate": true,
   "ocr_language": "jpn",
-  "global_overlays_enabled": true,
+  "global_overlays_enabled": false,
   "overlay_settings": {
-    "char": {
-      "enabled": true,
-      "font_family": "Segoe UI",
-      "font_size": 14,
-      "font_color": "white",
-      "bg_color": "#222",
-      "position": "center_roi",
-      "justify": "left",
-      "wraplength": 450,
-      "geometry": "208x40+874+774",
-      "alpha": 1.0
-    },
     "dialogue": {
-      "geometry": "794x104+832+844",
-      "enabled": true,
-      "font_family": "Segoe UI",
-      "font_size": 14,
-      "font_color": "white",
-      "bg_color": "#222",
-      "justify": "left",
-      "wraplength": 450,
-      "alpha": 1.0
+      "geometry": "627x120+837+712"
+    },
+    "test": {
+      "geometry": "470x50+886+520"
+    },
+    "char": {
+      "geometry": "137x35+867+665"
     }
   },
-  "floating_controls_pos": "918,120",
+  "floating_controls_pos": "866,52",
   "last_preset": null,
   "translation_window_char_geometry": null
 }

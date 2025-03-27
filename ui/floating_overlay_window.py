@@ -11,11 +11,13 @@ class FloatingOverlayWindow(tk.Toplevel):
     MIN_WIDTH = 50
     MIN_HEIGHT = 30
 
-    def __init__(self, master, roi_name, initial_config):
+    # <<< Add manager reference >>>
+    def __init__(self, master, roi_name, initial_config, manager_ref):
         super().__init__(master)
         self.roi_name = roi_name
         self.config = initial_config
         self.master = master
+        self.manager = manager_ref # <<< Store reference to OverlayManager
 
         # --- Window Configuration ---
         self.overrideredirect(True)
@@ -90,11 +92,9 @@ class FloatingOverlayWindow(tk.Toplevel):
                     w, h = max(self.MIN_WIDTH, int(w_str)), max(self.MIN_HEIGHT, int(h_str))
                     x, y = int(pos_parts[0]), int(pos_parts[1])
                     self.geometry(f"{w}x{h}+{x}+{y}")
-                    # print(f"Overlay '{self.roi_name}': Loaded geometry {w}x{h}+{x}+{y}") # Less verbose
                     return
                 else: print(f"Overlay '{self.roi_name}': Invalid geometry format '{saved_geometry}'.")
             except Exception as e: print(f"Overlay '{self.roi_name}': Error parsing geometry '{saved_geometry}': {e}.")
-        # print(f"Overlay '{self.roi_name}': No valid geometry saved. Using default.") # Less verbose
         self.center_and_default_size()
 
 
@@ -105,7 +105,7 @@ class FloatingOverlayWindow(tk.Toplevel):
             if 'x' in current_geometry and '+' in current_geometry:
                 self.config['geometry'] = current_geometry
                 if save_overlay_config_for_roi(self.roi_name, {'geometry': current_geometry}):
-                    pass # print(f"Overlay '{self.roi_name}': Saved geometry {current_geometry}") # Less verbose
+                    pass
                 else: print(f"Overlay '{self.roi_name}': Failed to save geometry.")
             else: print(f"Overlay '{self.roi_name}': Invalid geometry to save: {current_geometry}")
         except tk.TclError as e: print(f"Overlay '{self.roi_name}': Error getting geometry: {e}")
@@ -122,7 +122,6 @@ class FloatingOverlayWindow(tk.Toplevel):
             x = max(0, (screen_width // 2) - (default_width // 2))
             y = max(0, (screen_height // 3) - (default_height // 2))
             self.geometry(f"{default_width}x{default_height}+{x}+{y}")
-            # print(f"Overlay '{self.roi_name}': Set default geometry {default_width}x{default_height}+{x}+{y}") # Less verbose
         except Exception as e: print(f"Overlay '{self.roi_name}': Error setting default geometry: {e}")
 
 
@@ -140,20 +139,28 @@ class FloatingOverlayWindow(tk.Toplevel):
         self.label.config(font=label_font, fg=font_color, bg=bg_color, wraplength=wraplength, justify=justify_align)
         self.configure(background=bg_color)
 
-
-    def update_text(self, text):
+    # <<< Modified method to accept global state >>>
+    def update_text(self, text, global_overlays_enabled=True):
         if not isinstance(text, str): text = str(text)
         current_text = self.label_var.get()
         if text != current_text: self.label_var.set(text)
 
-        should_be_visible = bool(text) and self.config.get('enabled', True)
-        is_visible = self.state() == 'normal'
-
         # Check if window exists before modifying state
         if not self.winfo_exists(): return
 
-        if should_be_visible and not is_visible: self.deiconify(); self.lift()
-        elif not should_be_visible and is_visible: self.withdraw()
+        # Determine visibility based on GLOBAL state, text, and INDIVIDUAL config
+        # <<< Use global_overlays_enabled in the condition >>>
+        should_be_visible = global_overlays_enabled and bool(text) and self.config.get('enabled', True)
+
+        # Force Tkinter to process pending geometry/visibility changes (optional, might help)
+        self.update_idletasks()
+
+        is_visible = self.state() == 'normal'
+
+        if should_be_visible and not is_visible:
+            self.deiconify(); self.lift()
+        elif not should_be_visible and is_visible:
+            self.withdraw()
 
     def update_config(self, new_config):
         needs_geom_reload = False
@@ -166,16 +173,10 @@ class FloatingOverlayWindow(tk.Toplevel):
 
         if needs_geom_reload: self._load_geometry()
 
-        # Re-evaluate visibility
-        is_enabled = self.config.get('enabled', True)
-        has_text = bool(self.label_var.get())
-        should_be_visible = is_enabled and has_text
-        is_visible = self.state() == 'normal'
-
-        if not self.winfo_exists(): return
-
-        if should_be_visible and not is_visible: self.deiconify(); self.lift()
-        elif not should_be_visible and is_visible: self.withdraw()
+        # Re-evaluate visibility using the current text and the NEW config
+        # We still need the global state from the manager here
+        global_state = self.manager.global_overlays_enabled if self.manager else True
+        self.update_text(self.label_var.get(), global_overlays_enabled=global_state)
 
 
     # --- Dragging Methods ---
@@ -189,7 +190,6 @@ class FloatingOverlayWindow(tk.Toplevel):
         if not self._dragging: return
         new_x = self.winfo_x() + event.x - self._offset_x
         new_y = self.winfo_y() + event.y - self._offset_y
-        # Prevent updating geometry if window is closing
         if self.winfo_exists():
             self.geometry(f"+{new_x}+{new_y}")
 
@@ -204,9 +204,8 @@ class FloatingOverlayWindow(tk.Toplevel):
         self._resizing = True
         self._resize_start_x = event.x_root
         self._resize_start_y = event.y_root
-        # Check if window exists before getting width/height
         if not self.winfo_exists():
-            self._resizing = False # Cannot resize non-existent window
+            self._resizing = False
             return
         self._resize_start_width = self.winfo_width()
         self._resize_start_height = self.winfo_height()
@@ -218,7 +217,6 @@ class FloatingOverlayWindow(tk.Toplevel):
         new_width = max(self.MIN_WIDTH, self._resize_start_width + delta_x)
         new_height = max(self.MIN_HEIGHT, self._resize_start_height + delta_y)
 
-        # Check if window exists before setting geometry
         if self.winfo_exists():
             current_x = self.winfo_x()
             current_y = self.winfo_y()
@@ -233,7 +231,7 @@ class FloatingOverlayWindow(tk.Toplevel):
     def destroy_window(self):
         try:
             if self.winfo_exists(): self.destroy()
-        except tk.TclError: pass # Ignore if already gone
+        except tk.TclError: pass
         except Exception as e: print(f"Error destroying overlay {self.roi_name}: {e}")
 
 # --- END OF FILE ui/floating_overlay_window.py ---

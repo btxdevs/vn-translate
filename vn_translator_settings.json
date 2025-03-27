@@ -8,7 +8,7 @@
   "max_display_height": 600,
   "auto_translate": true,
   "ocr_language": "jpn",
-  "global_overlays_enabled": false,
+  "global_overlays_enabled": true,
   "overlay_settings": {
     "dialogue": {
       "geometry": "627x120+837+712"

@@ -337,6 +337,7 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
         "Input segments are tagged like <|1|>, <|2|>, etc. "
         "Your response MUST replicate this format exactly, using the same tags. "
         "Output ONLY the tagged translated lines."
+        "Do NOT include ANY extra text, commentary, explanations, greetings, summaries, apologies, or any conversational filler before, between, or after the tagged translations."
     )
     system_message = {"role": "system", "content": system_content}
 

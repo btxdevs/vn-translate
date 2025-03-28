@@ -9,7 +9,7 @@
   "global_overlays_enabled": true,
   "overlay_settings": {
     "dialogue": {
-      "geometry": "859x133+604+785"
+      "geometry": "859x133+599+786"
     },
     "test": {
       "geometry": "470x50+886+520"
@@ -38,7 +38,7 @@
       "alpha": 1.0
     }
   },
-  "floating_controls_pos": "846,19",
+  "floating_controls_pos": "847,19",
   "game_specific_context": {
     "b0dc215553e4b99784862d386e87db1c0d92a7566ca0cd9456fc7d8dd3561b9c": "Context:\nThere was a small library on that island. It was the Yuugyouji family\u2019s private library built solely for one girl, Yoruko, who didn\u2019t attend school and spent all her time there. With lots of intriguing books on its shelves, there was no happier place for a bookworm like her. There were also other wonderful and pleasant people who resided there: the protagonist Ruri and his cool sharp-tongued imouto Kisaki, the freeloading tennen moodmaker Rio, and the curious and honest \u201cdetective\u201d Kanata. It\u2019s as if they were all brought together by someone or something. Their love of books was the beginning of their youth. Before long, the lonely library became full of light and they became close like childhood friends.\nTwo years later, Ruri returned to the library after leaving the island due to family matters. Nothing seemed to have changed from six years ago, except that there was a secret which they were not aware of back then: \u201cAnything that is written in the magic book will become reality\u201d. If it\u2019s a romance novel, then a miracle-like love story will unfold. If it\u2019s a fantasy novel, then vampires will appear the next day. If it\u2019s a horror novel, then there\u2019ll be a ghost beckoning you from behind.\nYoruko\u2019s strong will. Kisaki\u2019s beauty. Rio\u2019s cheerfulness. Kanata\u2019s brilliance. Let\u2019s fall in love with them and books.\n\nCharacters:\n- Shijou Ruri (\u56db\u689d \u7460\u7483, M, Older brother to Kisaki)\n- Fushimi Rio (\u4f0f\u898b \u7406\u592e, F, Has feelings for Ruri)\n- Himukai Kanata (\u65e5\u5411 \u304b\u306a\u305f, F, Classmate of Ruri)\n- Tsukiyashiro Kisaki (\u6708\u793e \u5983, F, Younger sister to Ruri)\n- Yuugyouji Yoruko (\u904a\u884c\u5bfa \u591c\u5b50, F)\n- Chrysoberyl (\u30af\u30ea\u30bd\u30d9\u30ea\u30eb, F)\n- Honjou Kanade (\u672c\u57ce \u594f, F)\n- Honjou Misaki (\u672c\u57ce \u5cac, F)\n- Yuugyouji Nagisa (\u904a\u884c\u5bfa \u6c40, M)\n- Yuugyouji Yamiko (\u904a\u884c\u5bfa \u95c7\u5b50, F)"
   }

@@ -89,7 +89,7 @@ class ROITab(BaseTab):
         ttk.Label(self.color_filter_frame, text="Threshold:").grid(row=3, column=0, sticky=tk.W, padx=(0, 5), pady=2)
         self.color_widgets['threshold_var'] = tk.IntVar(value=30)
         self.color_widgets['threshold_scale'] = ttk.Scale(
-            self.color_filter_frame, from_=0, to=100, orient=tk.HORIZONTAL,
+            self.color_filter_frame, from_=0, to=200, orient=tk.HORIZONTAL,
             variable=self.color_widgets['threshold_var'], length=150,
             command=lambda v: self.color_widgets['threshold_label_var'].set(f"{int(float(v))}")
         )

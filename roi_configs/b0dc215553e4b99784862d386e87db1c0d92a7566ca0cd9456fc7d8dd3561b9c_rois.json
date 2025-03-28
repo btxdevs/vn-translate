@@ -4,13 +4,37 @@
     "x1": 255,
     "y1": 547,
     "x2": 465,
-    "y2": 574
+    "y2": 574,
+    "color_filter_enabled": true,
+    "target_color": [
+      0,
+      0,
+      0
+    ],
+    "color_threshold": 200,
+    "replacement_color": [
+      255,
+      255,
+      255
+    ]
   },
   {
     "name": "dialogue",
     "x1": 249,
     "y1": 596,
     "x2": 1073,
-    "y2": 705
+    "y2": 705,
+    "color_filter_enabled": true,
+    "target_color": [
+      0,
+      0,
+      0
+    ],
+    "color_threshold": 200,
+    "replacement_color": [
+      255,
+      255,
+      255
+    ]
   }
 ]

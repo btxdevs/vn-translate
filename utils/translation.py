@@ -140,13 +140,14 @@ def _load_context(hwnd):
     else: print(f"[CONTEXT] No context file found for current game ({context_file_path.name}). Starting fresh history.")
 
 def _save_context(hwnd):
-    """Saves the current global context_messages to the game-specific file."""
+    """Saves the current global context_messages (full history) to the game-specific file."""
     global context_messages
     if hwnd is None: return
     _ensure_context_dir(); context_file_path = _get_context_file_path(hwnd)
     if not context_file_path: print("[CONTEXT] Cannot save context, failed to get file path."); return
     try:
         with open(context_file_path, 'w', encoding='utf-8') as f:
+            # Save the entire context_messages list
             json.dump(context_messages, f, ensure_ascii=False, indent=2)
     except Exception as e: print(f"[CONTEXT] Error saving context to {context_file_path.name}: {e}")
 
@@ -164,17 +165,12 @@ def reset_context(hwnd):
     elif context_file_path: return "Context history reset (no file found to delete)."
     else: return "Context history reset (could not determine file path)."
 
-def add_context_message(message, context_limit):
-    """Add a message to the global translation context history, enforcing the limit."""
+# MODIFIED add_context_message
+def add_context_message(message):
+    """Add a message to the global translation context history. No trimming here."""
     global context_messages
-    try: limit = int(context_limit); limit = max(1, limit)
-    except (ValueError, TypeError): limit = 10
     context_messages.append(message)
-    max_messages = limit * 2; current_length = len(context_messages)
-    if current_length > max_messages:
-        context_messages = context_messages[-max_messages:]
-        new_length = len(context_messages)
-        print(f"[CONTEXT] History limit ({max_messages} msgs / {limit} exchanges) exceeded ({current_length} msgs). Trimmed to {new_length}.")
+    # No trimming logic here - the full history is maintained in context_messages
 
 # --- Translation Core Logic ---
 
@@ -264,6 +260,7 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
     """
     Translate the given text using an OpenAI-compatible API client, using game-specific caching and context.
     System prompt is now constructed internally.
+    Context history sent to the API is limited by context_limit.
     """
     cache_file_path = None if skip_cache else _get_cache_file_path(hwnd)
     if not skip_cache and not cache_file_path and hwnd is not None:
@@ -290,7 +287,6 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
     elif force_recache: print(f"[CACHE] SKIP requested (force_recache=True) for key: {cache_key[:10]}...")
 
     # --- Construct System Prompt Internally ---
-    # Base prompt focusing on the task and format
     base_system_prompt = (
         "You are a professional translation assistant. Your task is to translate text segments accurately "
         "from their source language into the target language specified in the user prompt. "
@@ -299,33 +295,55 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
         "For example, if the input is '<|1|> Hello\n<|2|> World' and the target language is French, the output must be '<|1|> Bonjour\n<|2|> Le monde'. "
         "Do NOT include ANY extra text, commentary, explanations, greetings, summaries, apologies, or any conversational filler before, between, or after the tagged translations."
     )
-    # We could potentially add target_language here, but it's usually better in the user prompt for clarity.
     system_content = base_system_prompt
     system_message = {"role": "system", "content": system_content}
     # --- End System Prompt Construction ---
 
+    # --- Prepare Context History for API Call (Apply Limit) ---
     history_to_send = []
     if not skip_history:
-        global context_messages; history_to_send = list(context_messages)
+        global context_messages # Use the full history stored globally
+        try:
+            # Use the context_limit passed to this function (originating from the preset)
+            limit_exchanges = int(context_limit)
+            limit_exchanges = max(1, limit_exchanges) # Ensure at least 1 exchange
+        except (ValueError, TypeError):
+            limit_exchanges = 10 # Fallback default if invalid
+            print(f"[CONTEXT] Warning: Invalid context_limit value '{context_limit}'. Using default: {limit_exchanges}")
+
+        # Calculate the number of messages (user + assistant) to send based on the exchange limit
+        max_messages_to_send = limit_exchanges * 2
+
+        # Slice the global context_messages list to get only the most recent messages
+        if len(context_messages) > max_messages_to_send:
+            # Select the last 'max_messages_to_send' items from the full history
+            history_to_send = context_messages[-max_messages_to_send:]
+            print(f"[CONTEXT] Sending last {len(history_to_send)} messages ({limit_exchanges} exchanges limit) to API.")
+        else:
+            # Send the entire history if it's shorter than the limit
+            history_to_send = list(context_messages)
+            print(f"[CONTEXT] Sending all {len(history_to_send)} available messages (within {limit_exchanges} exchanges limit) to API.")
+    # --- End Context History Preparation ---
 
     current_user_message_parts = []
     if additional_context.strip():
         current_user_message_parts.append(f"Additional context for this translation: {additional_context.strip()}")
-    # Explicitly state target language in user prompt
     current_user_message_parts.append(f"Translate the following segments into {target_language}, maintaining the exact <|n|> tags:")
     current_user_message_parts.append(preprocessed_text_for_llm)
     current_user_content_with_context = "\n\n".join(current_user_message_parts)
     current_user_message_for_api = {"role": "user", "content": current_user_content_with_context}
 
+    # Prepare the user message that will be *added* to the full history (without additional context)
     history_user_message = None
     if not skip_history:
         history_user_message_parts = [
-            f"Translate the following segments into {target_language}, maintaining the exact <|n|> tags:", # Keep target lang here too for history clarity
+            f"Translate the following segments into {target_language}, maintaining the exact <|n|> tags:",
             preprocessed_text_for_llm
         ]
         history_user_content = "\n\n".join(history_user_message_parts)
         history_user_message = {"role": "user", "content": history_user_content}
 
+    # Construct the final list of messages for the API call (using the potentially sliced history_to_send)
     messages_for_api = [system_message] + history_to_send + [current_user_message_for_api]
 
     if not preset.get("model") or not preset.get("api_url"):
@@ -348,9 +366,10 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
     for key, value in payload.items():
         if key != "messages": print(f"  - {key}: {value}")
     print(f"[API] Messages ({len(messages_for_api)} total):")
-    if messages_for_api[0]['role'] == 'system': print(f"  - [system] (Internal prompt used)") # Modified log message
+    if messages_for_api[0]['role'] == 'system': print(f"  - [system] (Internal prompt used)")
     if history_to_send:
-        print(f"  - [CONTEXT HISTORY - {len(history_to_send)} messages]:")
+        # Log the number of messages *actually sent*
+        print(f"  - [CONTEXT HISTORY - {len(history_to_send)} messages sent]:")
         for msg in history_to_send: print(f"    - {format_message_for_log(msg)}")
     print(f"  - {format_message_for_log(current_user_message_for_api)}")
     print("-" * 55)
@@ -391,18 +410,23 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
     if 'error' in final_translations:
         print("[LLM PARSE] Parsing failed after receiving response."); return final_translations
 
+    # --- Add to Stored History (using history_user_message) ---
     if not skip_history and history_user_message:
         add_to_history = True
+        # Check if the exact same user input was the last user input in the *full stored* history
         if len(context_messages) >= 2:
-            last_user_message_in_history = context_messages[-2]
-            if last_user_message_in_history.get('role') == 'user':
-                if last_user_message_in_history.get('content') == history_user_message.get('content'):
-                    add_to_history = False; print("[CONTEXT] Input identical to previous user message. Skipping history update.")
+            last_user_message_in_stored_history = context_messages[-2]
+            if last_user_message_in_stored_history.get('role') == 'user':
+                if last_user_message_in_stored_history.get('content') == history_user_message.get('content'):
+                    add_to_history = False; print("[CONTEXT] Input identical to previous user message in stored history. Skipping history update.")
+
         if add_to_history:
             current_assistant_message = {"role": "assistant", "content": response_text}
-            add_context_message(history_user_message, context_limit)
-            add_context_message(current_assistant_message, context_limit)
-            _save_context(hwnd)
+            # Add to the full global history list (no limit applied here)
+            add_context_message(history_user_message)
+            add_context_message(current_assistant_message)
+            _save_context(hwnd) # Save the updated full history
+    # --- End Add to Stored History ---
 
     if not skip_cache and cache_file_path:
         set_cache_translation(cache_key, final_translations, cache_file_path)

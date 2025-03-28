@@ -1,7 +1,7 @@
 {
   "last_preset_name": "Local",
   "target_language": "English",
-  "stable_threshold": 10,
+  "stable_threshold": 5,
   "max_display_width": 800,
   "max_display_height": 600,
   "auto_translate": true,
@@ -9,13 +9,13 @@
   "global_overlays_enabled": true,
   "overlay_settings": {
     "dialogue": {
-      "geometry": "859x133+780+477"
+      "geometry": "859x133+604+785"
     },
     "test": {
       "geometry": "470x50+886+520"
     },
     "char": {
-      "geometry": "215x35+858+372"
+      "geometry": "215x35+595+738"
     },
     "_snip_translate": {
       "enabled": true,

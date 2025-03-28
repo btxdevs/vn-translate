@@ -1046,5 +1046,13 @@
   {
     "role": "assistant",
     "content": "<|1|> Our shared hobby as siblings"
+  },
+  {
+    "role": "user",
+    "content": "Translate the following segments into English, maintaining the exact <|n|> tags:\n\n<|1|> 瑠璃\n<|2|> 「あいつは- - _ 夜子は、今でも本の虫なのか？」"
+  },
+  {
+    "role": "assistant",
+    "content": "<|1|> Ruri\n<|2|> \"I wonder if Yoruko is still a bookworm?\""
   }
 ]

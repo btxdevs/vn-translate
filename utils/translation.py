@@ -12,8 +12,9 @@ from utils.capture import get_executable_details # Import the new function
 # File-based cache settings
 APP_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) # Get app root directory
 CACHE_DIR = APP_DIR / "cache"
+CONTEXT_DIR = APP_DIR / "context_history" # NEW: Directory for context files
 
-# Context management (global list)
+# Context management (global list - represents the currently loaded context)
 context_messages = []
 
 # --- Logging Helper ---
@@ -27,7 +28,7 @@ def format_message_for_log(message):
     content_display = content_display.replace('\n', '\\n')
     return f"[{role}] '{content_display}'"
 
-# --- Cache and Context Functions (Mostly unchanged, added logging to add_context_message) ---
+# --- Directory and Hashing ---
 
 def _ensure_cache_dir():
     """Make sure the cache directory exists"""
@@ -35,6 +36,13 @@ def _ensure_cache_dir():
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
     except Exception as e:
         print(f"Error creating cache directory {CACHE_DIR}: {e}")
+
+def _ensure_context_dir():
+    """Make sure the context history directory exists"""
+    try:
+        CONTEXT_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        print(f"Error creating context directory {CONTEXT_DIR}: {e}")
 
 def _get_game_hash(hwnd):
     """Generates a hash based on the game's executable path and size."""
@@ -60,6 +68,17 @@ def _get_cache_file_path(hwnd):
         # Fallback to a generic name if hashing fails
         return CACHE_DIR / "default_cache.json"
 
+def _get_context_file_path(hwnd):
+    """Gets the specific context history file path for the given game window."""
+    game_hash = _get_game_hash(hwnd)
+    if game_hash:
+        return CONTEXT_DIR / f"{game_hash}_context.json"
+    else:
+        print("Warning: Could not determine game hash for context file path.")
+        return None
+
+
+# --- Cache Handling ---
 
 def _load_cache(cache_file_path):
     """Load the translation cache from the specified game file"""
@@ -95,40 +114,6 @@ def _save_cache(cache, cache_file_path):
             json.dump(cache, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print(f"Error saving cache to {cache_file_path}: {e}")
-
-def reset_context():
-    """Reset the translation context history."""
-    global context_messages
-    context_messages = []
-    print("Translation context history reset.")
-    return "Translation context has been reset."
-
-def add_context_message(message, context_limit):
-    """Add a message to the translation context history, enforcing the limit."""
-    global context_messages
-    # Ensure context_limit is a positive integer
-    try:
-        limit = int(context_limit)
-        if limit <= 0:
-            limit = 1 # Keep at least one exchange if limit is invalid
-    except (ValueError, TypeError):
-        limit = 10 # Default if conversion fails
-
-    context_messages.append(message)
-    # Maintain pairs (user + assistant). Trim oldest pairs if limit exceeded.
-    # Example: limit=2 means keep last 2 user and 2 assistant messages (4 total)
-    max_messages = limit * 2
-    current_length = len(context_messages)
-
-    if current_length > max_messages:
-        context_messages = context_messages[-max_messages:]
-        new_length = len(context_messages)
-        # Log the trimming action
-        print(f"[CONTEXT] History limit ({max_messages} msgs / {limit} exchanges) exceeded ({current_length} msgs). Trimmed to {new_length}.")
-    # else:
-    # Optional: Log when context is added but not trimmed
-    # print(f"[CONTEXT] Added message. History length: {current_length}/{max_messages}")
-
 
 def clear_current_game_cache(hwnd):
     """Clear the translation cache for the currently selected game."""
@@ -174,6 +159,109 @@ def clear_all_cache():
         print(f"Error iterating cache directory {CACHE_DIR}: {e}")
         return f"Error accessing cache directory: {e}"
 
+# --- Context History Handling ---
+
+def _load_context(hwnd):
+    """Loads context history from the game-specific file into the global list."""
+    global context_messages
+    _ensure_context_dir()
+    context_file_path = _get_context_file_path(hwnd)
+    context_messages = [] # Start fresh before loading
+
+    if not context_file_path:
+        print("[CONTEXT] Cannot load context, failed to get file path.")
+        return # Keep context_messages empty
+
+    if context_file_path.exists():
+        try:
+            with open(context_file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                if content:
+                    loaded_history = json.loads(content)
+                    # Basic validation: check if it's a list
+                    if isinstance(loaded_history, list):
+                        context_messages = loaded_history
+                        print(f"[CONTEXT] Loaded {len(context_messages)} messages from {context_file_path.name}")
+                    else:
+                        print(f"[CONTEXT] Error: Loaded context from {context_file_path.name} is not a list. Resetting history.")
+                else:
+                    print(f"[CONTEXT] Context file {context_file_path.name} is empty.")
+        except json.JSONDecodeError:
+            print(f"[CONTEXT] Error: Context file {context_file_path.name} is corrupted. Resetting history.")
+            # Optionally backup corrupted file here too
+        except Exception as e:
+            print(f"[CONTEXT] Error loading context from {context_file_path.name}: {e}. Resetting history.")
+    else:
+        print(f"[CONTEXT] No context file found for current game ({context_file_path.name}). Starting fresh history.")
+
+def _save_context(hwnd):
+    """Saves the current global context_messages to the game-specific file."""
+    global context_messages
+    _ensure_context_dir()
+    context_file_path = _get_context_file_path(hwnd)
+
+    if not context_file_path:
+        print("[CONTEXT] Cannot save context, failed to get file path.")
+        return
+
+    try:
+        with open(context_file_path, 'w', encoding='utf-8') as f:
+            json.dump(context_messages, f, ensure_ascii=False, indent=2)
+        # print(f"[CONTEXT] Saved {len(context_messages)} messages to {context_file_path.name}") # Less verbose
+    except Exception as e:
+        print(f"[CONTEXT] Error saving context to {context_file_path.name}: {e}")
+
+
+def reset_context(hwnd):
+    """Reset the global translation context history AND delete the game-specific file."""
+    global context_messages
+    context_messages = []
+    print("[CONTEXT] In-memory context history reset.")
+
+    # Also delete the file for the current game
+    context_file_path = _get_context_file_path(hwnd)
+    if context_file_path and context_file_path.exists():
+        try:
+            os.remove(context_file_path)
+            print(f"[CONTEXT] Deleted context file: {context_file_path.name}")
+            return "Translation context history reset and file deleted."
+        except Exception as e:
+            print(f"[CONTEXT] Error deleting context file {context_file_path.name}: {e}")
+            return f"Context history reset, but error deleting file: {e}"
+    elif context_file_path:
+        return "Context history reset (no file found to delete)."
+    else:
+        return "Context history reset (could not determine file path)."
+
+
+def add_context_message(message, context_limit):
+    """Add a message to the global translation context history, enforcing the limit."""
+    global context_messages
+    # Ensure context_limit is a positive integer
+    try:
+        limit = int(context_limit)
+        if limit <= 0:
+            limit = 1 # Keep at least one exchange if limit is invalid
+    except (ValueError, TypeError):
+        limit = 10 # Default if conversion fails
+
+    context_messages.append(message)
+    # Maintain pairs (user + assistant). Trim oldest pairs if limit exceeded.
+    # Example: limit=2 means keep last 2 user and 2 assistant messages (4 total)
+    max_messages = limit * 2
+    current_length = len(context_messages)
+
+    if current_length > max_messages:
+        context_messages = context_messages[-max_messages:]
+        new_length = len(context_messages)
+        # Log the trimming action
+        print(f"[CONTEXT] History limit ({max_messages} msgs / {limit} exchanges) exceeded ({current_length} msgs). Trimmed to {new_length}.")
+    # else:
+    # Optional: Log when context is added but not trimmed
+    # print(f"[CONTEXT] Added message. History length: {current_length}/{max_messages}")
+
+
+# --- Translation Core Logic ---
 
 def get_cache_key(text, target_language):
     """
@@ -203,36 +291,22 @@ def parse_translation_output(response_text, original_tag_mapping):
     """
     Parse the translation output from a tagged format (<|n|>)
     and map it back to the original ROI names using the tag_mapping.
-
-    Args:
-        response_text: The raw text from the LLM.
-        original_tag_mapping: Dictionary mapping segment numbers ('1', '2',...) to original ROI names.
-
-    Returns:
-        Dictionary mapping original ROI names to translated text.
-        Returns {'error': msg} if parsing fails badly.
+    (Function unchanged)
     """
     parsed_segments = {}
-    # Regex to find <|number|> content pairs, trying to capture content until the next tag or end of string
-    # Updated regex to handle potential variations and ensure non-greedy matching of content
     pattern = r"<\|(\d+)\|>(.*?)(?=<\|\d+\|>|$)"
-
-    matches = re.findall(pattern, response_text, re.DOTALL | re.MULTILINE) # DOTALL matches newline, MULTILINE anchors ^$
+    matches = re.findall(pattern, response_text, re.DOTALL | re.MULTILINE)
 
     if matches:
         for segment_number, content in matches:
             original_roi_name = original_tag_mapping.get(segment_number)
             if original_roi_name:
-                # Clean up content: strip leading/trailing whitespace
                 cleaned_content = content.strip()
-                # Optional: Normalize multiple spaces/newlines within the content?
-                # cleaned_content = ' '.join(cleaned_content.split())
                 parsed_segments[original_roi_name] = cleaned_content
             else:
                 print(f"Warning: Received segment number '{segment_number}' which was not in the original mapping.")
     else:
-        # Fallback: Try strict line-by-line matching if the first pattern failed
-        line_pattern = r"^\s*<\|(\d+)\|>\s*(.*)$" # Match only if tag is at the start of a line
+        line_pattern = r"^\s*<\|(\d+)\|>\s*(.*)$"
         lines = response_text.strip().split('\n')
         found_line_match = False
         for line in lines:
@@ -246,28 +320,20 @@ def parse_translation_output(response_text, original_tag_mapping):
                 else:
                     print(f"Warning: Received segment number '{segment_number}' (line match) which was not in original mapping.")
         if not found_line_match:
-            # If still no matches, the format is likely wrong
             print("[LLM PARSE] Failed to parse any <|n|> segments from response.")
-            # print(f"Raw Response: '{response_text}'") # Logged elsewhere now
-            # Attempt a very basic extraction if response is just plain text (single segment case?)
             if not response_text.startswith("<|") and len(original_tag_mapping) == 1:
                 first_tag = next(iter(original_tag_mapping))
                 first_roi = original_tag_mapping[first_tag]
                 print(f"[LLM PARSE] Warning: Response had no tags, assuming plain text response for single ROI '{first_roi}'.")
                 parsed_segments[first_roi] = response_text.strip()
             else:
-                # Only return error if it's not a single segment plain text response
                 return {"error": f"Error: Unable to extract formatted translation.\nRaw response:\n{response_text}"}
 
-
-    # Check if all original tags were translated
     missing_tags = set(original_tag_mapping.values()) - set(parsed_segments.keys())
     if missing_tags:
         print(f"[LLM PARSE] Warning: Translation response missing segments for ROIs: {', '.join(missing_tags)}")
-        # Add placeholders for missing ones
         for roi_name in missing_tags:
             parsed_segments[roi_name] = "[Translation Missing]"
-
 
     return parsed_segments
 
@@ -275,66 +341,42 @@ def parse_translation_output(response_text, original_tag_mapping):
 def preprocess_text_for_translation(aggregated_text):
     """
     Convert input text with tags like [tag]: content to the numbered format <|1|> content.
-    Ensures that only lines matching the pattern are converted.
-
-    Args:
-        aggregated_text: Multi-line string with "[ROI_Name]: Content" format.
-
-    Returns:
-        tuple: (preprocessed_text_for_llm, tag_mapping)
-               preprocessed_text_for_llm: Text like "<|1|> Content1\n<|2|> Content2"
-               tag_mapping: Dictionary mapping '1' -> 'ROI_Name1', '2' -> 'ROI_Name2'
+    (Function unchanged)
     """
     lines = aggregated_text.strip().split('\n')
     preprocessed_lines = []
     tag_mapping = {}
     segment_count = 1
-
     for line in lines:
-        # More robust regex: allows spaces around colon, captures ROI name and content
         match = re.match(r'^\s*\[\s*([^\]]+)\s*\]\s*:\s*(.*)$', line)
         if match:
             roi_name, content = match.groups()
             roi_name = roi_name.strip()
             content = content.strip()
-            if content: # Only include segments with actual content
+            if content:
                 tag_mapping[str(segment_count)] = roi_name
                 preprocessed_lines.append(f"<|{segment_count}|> {content}")
                 segment_count += 1
             else:
                 print(f"Skipping empty content for ROI: {roi_name}")
         else:
-            # Ignore lines that don't match the expected format
             print(f"Ignoring line, does not match '[ROI]: content' format: {line}")
-
     if not tag_mapping:
         print("Warning: No lines matched the '[ROI]: content' format during preprocessing.")
-
     return '\n'.join(preprocessed_lines), tag_mapping
 
 
 def translate_text(aggregated_input_text, hwnd, preset, target_language="en", additional_context="", context_limit=10, force_recache=False):
     """
-    Translate the given text using an OpenAI-compatible API client, using game-specific caching.
-
-    Args:
-        aggregated_input_text: Text in "[ROI_Name]: Content" format.
-        hwnd: The window handle of the game (used for cache identification).
-        preset: The translation preset configuration (LLM specific parts).
-        target_language: The target language code (e.g., "en", "Spanish").
-        additional_context: General instructions or context from the UI (used only for the current call).
-        context_limit: Max number of conversational exchanges (user+assistant pairs) to keep in history.
-        force_recache: If True, skip cache check and force API call, then update cache.
-
-    Returns:
-        A dictionary mapping original ROI names to translated text,
-        or {'error': message} on failure.
+    Translate the given text using an OpenAI-compatible API client, using game-specific caching and context.
     """
-    # 0. Determine Cache File
+    # 0. Determine Cache and Context File Paths
     cache_file_path = _get_cache_file_path(hwnd)
-    if not cache_file_path:
-        print("Error: Cannot proceed with translation without a valid cache file path.")
-        return {"error": "Could not determine cache file path for the game."}
+    # context_file_path = _get_context_file_path(hwnd) # Not needed directly here, used by load/save helpers
+
+    if not cache_file_path: # If we can't get cache path, likely can't get context path either
+        print("Error: Cannot proceed with translation without a valid game identifier.")
+        return {"error": "Could not determine file paths for the game."}
 
     # 1. Preprocess input text to <|n|> format and get mapping
     preprocessed_text_for_llm, tag_mapping = preprocess_text_for_translation(aggregated_input_text)
@@ -349,9 +391,7 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
         cached_result = get_cached_translation(cache_key, cache_file_path)
         if cached_result:
             print(f"[CACHE] HIT for key: {cache_key[:10]}... in {cache_file_path.name}")
-            # Ensure cache returns the expected format (roi_name -> translation)
             if isinstance(cached_result, dict) and not 'error' in cached_result:
-                # Quick check: does cached result contain keys for current request?
                 if all(roi_name in cached_result for roi_name in tag_mapping.values()):
                     return cached_result
                 else:
@@ -367,7 +407,6 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
     # 3. Prepare messages for API
     # System Prompt
     system_prompt = preset.get('system_prompt', "You are a translator.")
-    # Refined System Prompt for clarity
     system_content = (
         f"{system_prompt}\n\n"
         f"Translate the following text segments into {target_language}. "
@@ -378,15 +417,14 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
     )
     system_message = {"role": "system", "content": system_content}
 
-    # Get context history (if any) - make a copy
+    # Get context history (if any) - uses the current global context_messages
     global context_messages
-    history_to_send = list(context_messages)
+    history_to_send = list(context_messages) # Send a copy
 
     # --- Construct the CURRENT user message WITH additional_context ---
     current_user_message_parts = []
     if additional_context.strip():
-        current_user_message_parts.append(f"{additional_context.strip()}")
-    # The core request
+        current_user_message_parts.append(f"Additional context: {additional_context.strip()}")
     current_user_message_parts.append(f"Translate these segments to {target_language}, maintaining the exact <|n|> tags:")
     current_user_message_parts.append(preprocessed_text_for_llm)
     current_user_content_with_context = "\n\n".join(current_user_message_parts)
@@ -538,6 +576,8 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
         current_assistant_message = {"role": "assistant", "content": response_text}
         add_context_message(history_user_message, context_limit) # Add the simplified user message
         add_context_message(current_assistant_message, context_limit) # Add the assistant response
+        # --- Save the updated context to file ---
+        _save_context(hwnd)
     # --- End Update Context ---
 
     # Add/Update cache using the key generated earlier and the game-specific file

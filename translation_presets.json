@@ -43,7 +43,7 @@
     "max_tokens": 1000
   },
   "Deepseek": {
-    "api_key": "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",
+    "api_key": "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",
     "api_url": "https://openrouter.ai/api/v1",
     "model": "deepseek/deepseek-chat-v3-0324",
     "system_prompt": "You are a professional translator. Translate the following text from its source language to the target language. Return your answer in the following format:\n<|1|> translated text for segment 1\n<|2|> translated text for segment 2\nand so on. Provide only the translated text lines, each preceded by its tag.",
@@ -55,7 +55,7 @@
     "context_limit": 10
   },
   "Local": {
-    "api_key": "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",
+    "api_key": "none",
     "api_url": "http://127.0.0.1:5000/v1",
     "model": "local",
     "system_prompt": "You are a professional translator. Translate the following text from its source language to the target language. Return your answer in the following format:\n<|1|> translated text for segment 1\n<|2|> translated text for segment 2\nand so on. Provide only the translated text lines, each preceded by its tag.",

@@ -277,7 +277,7 @@ class TranslationTab(BaseTab):
         self.clear_all_cache_btn = ttk.Button(cache_context_frame, text="Clear All Cache", command=self.clear_all_translation_cache)
         self.clear_all_cache_btn.pack(side=tk.TOP, padx=5, pady=2, anchor=tk.W)
 
-        self.reset_context_btn = ttk.Button(cache_context_frame, text="Reset Translation Context", command=self.reset_translation_context)
+        self.reset_context_btn = ttk.Button(cache_context_frame, text="Reset Translation Context", command=self.reset_translation_context) # Command updated below
         self.reset_context_btn.pack(side=tk.TOP, padx=5, pady=(5,2), anchor=tk.W) # Add some top padding
 
         # --- Translate Buttons (Grouped) ---
@@ -830,9 +830,12 @@ class TranslationTab(BaseTab):
 
 
     def reset_translation_context(self):
-        """Reset the translation context history and show confirmation."""
-        result = reset_context()
-        messagebox.showinfo("Context Reset", result, parent=self.app.master)
-        self.app.update_status("Translation context reset.")
+        """Reset the translation context history and delete the file for the current game."""
+        current_hwnd = self.app.selected_hwnd
+        # Ask for confirmation
+        if messagebox.askyesno("Confirm Reset Context", "Are you sure you want to reset the translation context history for the current game?\n(This will delete the saved history file)", parent=self.app.master):
+            result = reset_context(current_hwnd) # Pass hwnd to delete the correct file
+            messagebox.showinfo("Context Reset", result, parent=self.app.master)
+            self.app.update_status("Translation context reset.")
 
 # --- END OF FILE ui/translation_tab.py ---

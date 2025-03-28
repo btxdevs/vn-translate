@@ -25,7 +25,7 @@ from utils.settings import (
     save_overlay_config_for_roi,
 )
 from utils.roi import ROI
-from utils.translation import CACHE_DIR # Import CACHE_DIR for ensuring it exists
+from utils.translation import CACHE_DIR, CONTEXT_DIR, _load_context # Import dirs and load_context
 
 # Import UI components
 from ui.capture_tab import CaptureTab
@@ -70,6 +70,11 @@ class VisualNovelTranslatorApp:
             print(f"ROI Configs directory ensured at: {ROI_CONFIGS_DIR}")
         except Exception as e:
             print(f"Warning: Could not create ROI Configs directory {ROI_CONFIGS_DIR}: {e}")
+        try: # NEW: Ensure context directory exists
+            CONTEXT_DIR.mkdir(parents=True, exist_ok=True)
+            print(f"Context History directory ensured at: {CONTEXT_DIR}")
+        except Exception as e:
+            print(f"Warning: Could not create Context History directory {CONTEXT_DIR}: {e}")
 
 
         # --- Initialize variables ---
@@ -216,27 +221,44 @@ class VisualNovelTranslatorApp:
 
     def load_game_context(self, hwnd):
         """Loads the game-specific context and updates the TranslationTab."""
-        context_to_load = ""
-        if hwnd:
-            game_hash = _get_game_hash(hwnd)
-            if game_hash:
-                all_contexts = get_setting("game_specific_context", {})
-                context_to_load = all_contexts.get(game_hash, "") # Get context or default empty
-                print(f"Loaded context for game hash {game_hash[:8]}...")
-            else:
-                print("Could not get game hash to load context.")
-        else:
-            print("No window selected, clearing context display.")
+        # Load context from file (updates global context_messages in translation.py)
+        _load_context(hwnd)
 
-        # Update the UI in TranslationTab
+        # Get the loaded context (which is now in the global list)
+        # We don't need the text content here, just need to trigger UI update
+        # context_to_load = "" # Default if load failed or no context
+        # if hwnd:
+        #     game_hash = _get_game_hash(hwnd)
+        #     if game_hash:
+        #         all_contexts = get_setting("game_specific_context", {})
+        #         context_to_load = all_contexts.get(game_hash, "")
+
+        # Update the UI in TranslationTab using the loaded global context
+        # (This part seems redundant if _load_context updates the global var directly)
+        # Let's simplify: _load_context handles the global var, UI just reads it when needed.
+        # However, we DO need to update the *display* in the TranslationTab UI.
+        # We need the actual text loaded by _load_context for this.
+        # Let's modify _load_context to return the loaded list or empty list.
+
+        # --- Reworked approach: _load_context updates global, we read global for UI ---
+        from utils.translation import context_messages as loaded_context_list # Import the global list
+
+        # Reconstruct the text representation if needed for display (though maybe not necessary?)
+        # For now, just signal that context was loaded/cleared.
+        # The translation tab itself reads the global context_messages when sending.
+        # We *do* need to update the "Additional Context" text box though.
+        all_game_contexts = get_setting("game_specific_context", {})
+        game_hash = _get_game_hash(hwnd) if hwnd else None
+        context_text_for_ui = all_game_contexts.get(game_hash, "") if game_hash else ""
+
         if hasattr(self, 'translation_tab') and self.translation_tab.frame.winfo_exists():
-            self.translation_tab.load_context_for_game(context_to_load)
+            self.translation_tab.load_context_for_game(context_text_for_ui)
         else:
-            print("Translation tab not available to load context.")
+            print("Translation tab not available to display context.")
 
 
     def load_rois_for_hwnd(self, hwnd):
-        """Load ROIs automatically for the given window handle and also load game context."""
+        """Load ROIs and context automatically for the given window handle."""
         if not hwnd:
             # Clear ROIs if hwnd is None (e.g., window closed or selection cleared)
             if self.rois: # Only update if there were ROIs before
@@ -249,7 +271,7 @@ class VisualNovelTranslatorApp:
                 self.update_status("No window selected. ROIs cleared.")
                 # Clear text displays and context
                 self._clear_text_data()
-                self.load_game_context(None) # Clear context display
+                self.load_game_context(None) # Clear context display and global context list
             return
 
         self.update_status(f"Checking for ROIs for HWND {hwnd}...")
@@ -272,8 +294,9 @@ class VisualNovelTranslatorApp:
                     # No previous ROIs and none found for current game
                     self.update_status(f"No ROIs found for current game. Define new ROIs.")
 
-            # --- Load Game Context ---
-            self.load_game_context(hwnd)
+            # --- Load Game Context and History ---
+            self.load_game_context(hwnd) # Loads game-specific additional context text
+            _load_context(hwnd) # Loads game-specific history into global list
             # --- End Load Game Context ---
 
             # Update UI regardless of whether ROIs were loaded or cleared
@@ -283,7 +306,7 @@ class VisualNovelTranslatorApp:
             self._clear_text_data()
 
         except Exception as e:
-            self.update_status(f"Error loading ROIs for HWND {hwnd}: {str(e)}")
+            self.update_status(f"Error loading ROIs/Context for HWND {hwnd}: {str(e)}")
             import traceback
             traceback.print_exc()
             # Clear ROIs and context on error
@@ -293,7 +316,7 @@ class VisualNovelTranslatorApp:
             if hasattr(self, "overlay_manager"): self.overlay_manager.rebuild_overlays()
             self.master.title("Visual Novel Translator")
             self._clear_text_data()
-            self.load_game_context(None) # Clear context display
+            self.load_game_context(None) # Clear context display and global list
 
     def _clear_text_data(self):
         """Clears text history, stable text, and updates relevant UI tabs."""
@@ -311,8 +334,8 @@ class VisualNovelTranslatorApp:
                 self.translation_tab.translation_display.config(state=tk.NORMAL)
                 self.translation_tab.translation_display.delete(1.0, tk.END)
                 self.translation_tab.translation_display.config(state=tk.DISABLED)
-                # Clear context (handled by load_game_context called elsewhere)
-                # self.translation_tab.load_context_for_game("") # Or call load_game_context(None)
+                # Clear additional context display (loading new one handles this)
+                # self.translation_tab.load_context_for_game("")
             except tk.TclError: pass # Ignore if widget destroyed
         if hasattr(self, 'overlay_manager'):
             self.overlay_manager.clear_all_overlays()
@@ -378,8 +401,7 @@ class VisualNovelTranslatorApp:
             messagebox.showwarning("Warning", "No visual novel window selected.", parent=self.master)
             return
 
-        # Attempt to load ROIs for the selected window if not already loaded
-        # This handles cases where the user selects a window but doesn't trigger on_window_selected again
+        # Attempt to load ROIs/Context for the selected window if not already loaded
         if not self.rois and self.selected_hwnd:
             self.load_rois_for_hwnd(self.selected_hwnd) # This now also loads context
 

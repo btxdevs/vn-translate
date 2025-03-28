@@ -9,7 +9,7 @@
   "global_overlays_enabled": true,
   "overlay_settings": {
     "dialogue": {
-      "geometry": "786x112+698+758"
+      "geometry": "786x112+709+758"
     },
     "test": {
       "geometry": "470x50+886+520"

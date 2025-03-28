@@ -1,3 +1,5 @@
+# --- START OF FILE app.py ---
+
 import tkinter as tk
 from tkinter import ttk, messagebox
 import threading
@@ -19,7 +21,7 @@ from utils.config import load_rois, ROI_CONFIGS_DIR, _get_game_hash
 # Import settings functions
 from utils.settings import (
     load_settings,
-    set_setting,
+    set_setting, # Make sure set_setting is imported
     get_setting,
     update_settings,
     get_overlay_config_for_roi,  # Used for both ROI and Snip config
@@ -34,7 +36,7 @@ from utils.translation import context_messages as global_context_messages
 # Import UI components
 from ui.capture_tab import CaptureTab
 from ui.roi_tab import ROITab
-from ui.text_tab import TextTab, StableTextTab
+from ui.text_tab import TextTab, StableTextTab # Import both text tabs
 from ui.translation_tab import TranslationTab
 from ui.overlay_tab import OverlayTab, SNIP_ROI_NAME  # Import special name
 from ui.overlay_manager import OverlayManager
@@ -100,7 +102,8 @@ class VisualNovelTranslatorApp:
 
         self.text_history = {}
         self.stable_texts = {}
-        self.stable_threshold = get_setting("stable_threshold", 5)
+        # Load stable_threshold from settings
+        self.stable_threshold = get_setting("stable_threshold", 3) # Default 3 if not found
         self.max_display_width = get_setting("max_display_width", 800)
         self.max_display_height = get_setting("max_display_height", 600)
         self.last_status_message = ""
@@ -165,7 +168,7 @@ class VisualNovelTranslatorApp:
         self.notebook.add(self.roi_tab.frame, text="ROIs")
         self.overlay_tab = OverlayTab(self.notebook, self)
         self.notebook.add(self.overlay_tab.frame, text="Overlays")
-        self.text_tab = TextTab(self.notebook, self)
+        self.text_tab = TextTab(self.notebook, self) # Use the updated TextTab
         self.notebook.add(self.text_tab.frame, text="Live Text")
         self.stable_text_tab = StableTextTab(self.notebook, self)
         self.notebook.add(self.stable_text_tab.frame, text="Stable Text")
@@ -362,6 +365,21 @@ class VisualNovelTranslatorApp:
                     self.ocr = None
 
         threading.Thread(target=init_engine, daemon=True).start()
+
+    # --- NEW Method to update stable_threshold ---
+    def update_stable_threshold(self, new_value):
+        """Updates the stable threshold value and saves it to settings."""
+        if isinstance(new_value, int) and new_value >= 1:
+            if self.stable_threshold != new_value:
+                self.stable_threshold = new_value
+                if set_setting("stable_threshold", new_value):
+                    self.update_status(f"Stability threshold set to {new_value}.")
+                    print(f"Stability threshold updated to: {new_value}")
+                else:
+                    self.update_status("Error saving stability threshold.")
+        else:
+            print(f"Ignored invalid threshold value: {new_value}")
+    # --- End NEW Method ---
 
     def start_capture(self):
         """Start capturing from the selected window."""
@@ -998,7 +1016,9 @@ class VisualNovelTranslatorApp:
                 else:
                     history = {"text": text, "count": 1}
                 self.text_history[roi.name] = history
+                # --- Use self.stable_threshold here ---
                 is_now_stable = history["count"] >= self.stable_threshold
+                # --- End threshold usage ---
                 was_stable = roi.name in self.stable_texts
                 current_stable = self.stable_texts.get(roi.name)
                 if is_now_stable:
@@ -1046,13 +1066,16 @@ class VisualNovelTranslatorApp:
         if not hasattr(self, "canvas") or not self.canvas.winfo_exists() or self.frame_display_coords["w"] <= 0:
             return
         ox, oy = self.frame_display_coords["x"], self.frame_display_coords["y"]
+        self.canvas.delete("roi_drawing") # Clear previous drawings
         for i, roi in enumerate(self.rois):
+            # Skip drawing special internal ROIs like snip
+            if roi.name == SNIP_ROI_NAME: continue
             try:
                 dx1 = int(roi.x1 * self.scale_x) + ox
                 dy1 = int(roi.y1 * self.scale_y) + oy
                 dx2 = int(roi.x2 * self.scale_x) + ox
                 dy2 = int(roi.y2 * self.scale_y) + oy
-                self.canvas.create_rectangle(dx1, dy1, dx2, dy2, outline="lime", width=1, tags=("display_content", f"roi_{i}"))
+                self.canvas.create_rectangle(dx1, dy1, dx2, dy2, outline="lime", width=1, tags=("display_content", "roi_drawing", f"roi_{i}"))
                 self.canvas.create_text(
                     dx1 + 3,
                     dy1 + 1,
@@ -1060,7 +1083,7 @@ class VisualNovelTranslatorApp:
                     fill="lime",
                     anchor=tk.NW,
                     font=("TkDefaultFont", 8),
-                    tags=("display_content", f"roi_label_{i}"),
+                    tags=("display_content", "roi_drawing", f"roi_label_{i}"),
                     )
             except Exception as e:
                 print(f"Error drawing ROI {roi.name}: {e}")
@@ -1151,10 +1174,10 @@ class VisualNovelTranslatorApp:
         if not roi_name:
             i = 1
             roi_name = f"roi_{i}"
-            while roi_name in [r.name for r in self.rois]:
+            while roi_name in [r.name for r in self.rois if r.name != SNIP_ROI_NAME]: # Check against actual ROIs
                 i += 1
                 roi_name = f"roi_{i}"
-        elif roi_name in [r.name for r in self.rois]:
+        elif roi_name in [r.name for r in self.rois if r.name != SNIP_ROI_NAME]: # Check against actual ROIs
             if not messagebox.askyesno(
                     "ROI Exists", f"Overwrite ROI '{roi_name}'?", parent=self.master
             ):
@@ -1188,22 +1211,26 @@ class VisualNovelTranslatorApp:
         self.rois.append(new_roi)
         print(f"Created/Updated ROI: {new_roi.to_dict()}")
         if hasattr(self, "roi_tab"):
-            self.roi_tab.update_roi_list()
+            self.roi_tab.update_roi_list() # Updates ROI tab and Overlay tab combo
         self._draw_rois()
         action = "created" if not overwrite_name else "updated"
         self.update_status(f"ROI '{roi_name}' {action}. Remember to save.")
 
         if hasattr(self, "roi_tab"):
-            next_name = "dialogue" if "dialogue" not in [r.name for r in self.rois] else ""
+            # Suggest next name (excluding snip name)
+            existing_names = {r.name for r in self.rois if r.name != SNIP_ROI_NAME}
+            next_name = "dialogue" if "dialogue" not in existing_names else ""
             if not next_name:
                 i = 1
                 next_name = f"roi_{i}"
-                while next_name in [r.name for r in self.rois]:
+                while next_name in existing_names:
                     i += 1
                     next_name = f"roi_{i}"
             self.roi_tab.roi_name_entry.delete(0, tk.END)
             self.roi_tab.roi_name_entry.insert(0, next_name)
+
         if hasattr(self, "overlay_manager"):
+            # Ensure overlay is created/updated if it wasn't already
             self.overlay_manager.create_overlay_for_roi(new_roi)
         if self.using_snapshot:
             self.return_to_live()

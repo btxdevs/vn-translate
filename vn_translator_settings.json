@@ -1,21 +1,21 @@
 {
   "last_preset_name": "Local",
   "target_language": "English",
-  "stable_threshold": 5,
+  "stable_threshold": 10,
   "max_display_width": 800,
   "max_display_height": 600,
-  "auto_translate": false,
+  "auto_translate": true,
   "ocr_language": "jpn",
   "global_overlays_enabled": true,
   "overlay_settings": {
     "dialogue": {
-      "geometry": "786x112+753+838"
+      "geometry": "786x112+690+722"
     },
     "test": {
       "geometry": "470x50+886+520"
     },
     "char": {
-      "geometry": "215x35+431+792"
+      "geometry": "215x35+682+669"
     },
     "_snip_translate": {
       "enabled": true,

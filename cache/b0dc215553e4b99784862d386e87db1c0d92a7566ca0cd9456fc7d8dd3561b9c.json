@@ -266,5 +266,27 @@
   },
   "e3e76fdb1fbb168c7327dcb270d628e17c6dd696d919639ca085a3ffd4207584": {
     "dialogue": "She looks up at me with a cold, amused smile."
+  },
+  "669d8a4c9ff358e94955857992271e00d5cec1e49d26c44f8c727ff0bb3f7b56": {
+    "char": "Ruri",
+    "dialogue": "[Don't say it so happily -]"
+  },
+  "cfff9d8d12ec757befc090aad1a0e68448f15aed6a675c80b395c285880ec45e": {
+    "dialogue": "There was no conviction in his words."
+  },
+  "c8832398542f537005bb484e2a0834174a879c3b615188affefb3e2e2c892814": {
+    "char": "Kisaki",
+    "dialogue": "[You have a masochistic streak, don't you?]"
+  },
+  "735e2d6af25047335bff2cc18d6118b3973ebb5d131f189130d5358f4ae655c4": {
+    "char": "Ruri",
+    "dialogue": "\"Hey, listen\""
+  },
+  "640a481dcafa90debcc8b6f5a4b4556db5d45c5b10f3d93e7e42b0f4dc98dc5e": {
+    "dialogue": "I was unjustly accused, and my voice rose in anger."
+  },
+  "eb51bc24b9a5df59f0083a5cedf1672d4a188d4677f8ae03d741fa1f169825e5": {
+    "char": "Kisaki",
+    "dialogue": "[And I’m a sadist.]"
   }
 }

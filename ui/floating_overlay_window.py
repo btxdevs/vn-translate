@@ -161,7 +161,11 @@ class FloatingOverlayWindow(tk.Toplevel):
         current_text = self.label_var.get()
         if text != current_text: self.label_var.set(text)
 
-        if not self.winfo_exists(): return
+        # Check widget existence early
+        try:
+            if not self.winfo_exists(): return
+        except tk.TclError:
+            return # Exit if window is destroyed
 
         # Determine visibility based on GLOBAL state (if managed), text, and INDIVIDUAL config
         manager_global_state = global_overlays_enabled
@@ -170,15 +174,33 @@ class FloatingOverlayWindow(tk.Toplevel):
         elif self.roi_name == "_snip_translate":
             manager_global_state = True # Snip window ignores global toggle
 
-        should_be_visible = manager_global_state and bool(text) and self.config.get('enabled', True)
+        # Visibility rule: Must be enabled globally AND individually
+        # AND (for showing) must have text. Hiding only happens if disabled.
+        is_individually_enabled = self.config.get('enabled', True)
+        should_be_visible_if_enabled = manager_global_state and is_individually_enabled
 
+        # Update tasks to get reliable state
         self.update_idletasks()
-        is_visible = self.state() == 'normal'
+        try:
+            is_visible = self.state() == 'normal'
+        except tk.TclError:
+            return # Exit if window is destroyed
 
-        if should_be_visible and not is_visible:
-            self.deiconify(); self.lift()
-        elif not should_be_visible and is_visible:
-            self.withdraw()
+        # Decide whether to show or hide
+        if should_be_visible_if_enabled and bool(text) and not is_visible:
+            # Show if: globally enabled, individually enabled, has text, and not currently visible
+            try:
+                self.deiconify()
+                self.lift()
+            except tk.TclError:
+                pass # Ignore if destroyed during operation
+        elif not should_be_visible_if_enabled and is_visible:
+            # Hide ONLY if: globally disabled OR individually disabled, and currently visible
+            # (Do NOT hide just because text is empty)
+            try:
+                self.withdraw()
+            except tk.TclError:
+                pass # Ignore if destroyed during operation
 
     def update_config(self, new_config):
         needs_geom_reload = False
@@ -216,7 +238,10 @@ class FloatingOverlayWindow(tk.Toplevel):
         new_x = self.winfo_x() + event.x - self._offset_x
         new_y = self.winfo_y() + event.y - self._offset_y
         if self.winfo_exists():
-            self.geometry(f"+{new_x}+{new_y}")
+            try:
+                self.geometry(f"+{new_x}+{new_y}")
+            except tk.TclError:
+                pass # Window might be destroyed during drag
 
     def on_release(self, event):
         if not self._dragging: return
@@ -231,8 +256,11 @@ class FloatingOverlayWindow(tk.Toplevel):
         self._resize_start_y = event.y_root
         if not self.winfo_exists():
             self._resizing = False; return
-        self._resize_start_width = self.winfo_width()
-        self._resize_start_height = self.winfo_height()
+        try:
+            self._resize_start_width = self.winfo_width()
+            self._resize_start_height = self.winfo_height()
+        except tk.TclError:
+            self._resizing = False; return
 
     def on_resize_drag(self, event):
         if not self._resizing: return
@@ -242,9 +270,12 @@ class FloatingOverlayWindow(tk.Toplevel):
         new_height = max(self.MIN_HEIGHT, self._resize_start_height + delta_y)
 
         if self.winfo_exists():
-            current_x = self.winfo_x()
-            current_y = self.winfo_y()
-            self.geometry(f"{new_width}x{new_height}+{current_x}+{current_y}")
+            try:
+                current_x = self.winfo_x()
+                current_y = self.winfo_y()
+                self.geometry(f"{new_width}x{new_height}+{current_x}+{current_y}")
+            except tk.TclError:
+                pass # Window might be destroyed during resize
 
     def on_resize_release(self, event):
         if not self._resizing: return

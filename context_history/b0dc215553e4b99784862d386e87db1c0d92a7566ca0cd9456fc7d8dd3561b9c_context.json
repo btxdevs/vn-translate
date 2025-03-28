@@ -654,5 +654,53 @@
   {
     "role": "assistant",
     "content": "<|1|> She looks up at me with a cold, amused smile."
+  },
+  {
+    "role": "user",
+    "content": "Translate these segments to English, maintaining the exact <|n|> tags:\n\n<|1|> 瑠璃\n<|2|> [嬉しそうに、 言うんじゃねえよ -"
+  },
+  {
+    "role": "assistant",
+    "content": "<|1|> Ruri\n<|2|> [Don't say it so happily -]"
+  },
+  {
+    "role": "user",
+    "content": "Translate these segments to English, maintaining the exact <|n|> tags:\n\n<|1|> 言葉に説得力が なかった。"
+  },
+  {
+    "role": "assistant",
+    "content": "<|1|> There was no conviction in his words."
+  },
+  {
+    "role": "user",
+    "content": "Translate these segments to English, maintaining the exact <|n|> tags:\n\n<|1|> 妃\n<|2|> [被虐趣味のくせに"
+  },
+  {
+    "role": "assistant",
+    "content": "<|1|> Kisaki\n<|2|> [You have a masochistic streak, don't you?]"
+  },
+  {
+    "role": "user",
+    "content": "Translate these segments to English, maintaining the exact <|n|> tags:\n\n<|1|> 瑠璃\n<|2|> 「あのなあ"
+  },
+  {
+    "role": "assistant",
+    "content": "<|1|> Ruri\n<|2|> \"Hey, listen\""
+  },
+  {
+    "role": "user",
+    "content": "Translate these segments to English, maintaining the exact <|n|> tags:\n\n<|1|> 不当な指摘をされて、 思わず声が荒ぶる。"
+  },
+  {
+    "role": "assistant",
+    "content": "<|1|> I was unjustly accused, and my voice rose in anger."
+  },
+  {
+    "role": "user",
+    "content": "Translate these segments to English, maintaining the exact <|n|> tags:\n\n<|1|> 妃\n<|2|> [そして私は、 加虐趣味"
+  },
+  {
+    "role": "assistant",
+    "content": "<|1|> Kisaki\n<|2|> [And I’m a sadist.]"
   }
 ]

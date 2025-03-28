@@ -1,6 +1,6 @@
 {
-  "last_preset_name": "Deepseek",
-  "target_language": "en",
+  "last_preset_name": "Local",
+  "target_language": "English",
   "stable_threshold": 3,
   "max_display_width": 800,
   "max_display_height": 600,
@@ -9,13 +9,13 @@
   "global_overlays_enabled": true,
   "overlay_settings": {
     "dialogue": {
-      "geometry": "786x112+584+766"
+      "geometry": "786x112+698+758"
     },
     "test": {
       "geometry": "470x50+886+520"
     },
     "char": {
-      "geometry": "215x35+567+714"
+      "geometry": "215x35+676+703"
     }
   },
   "floating_controls_pos": "866,52",

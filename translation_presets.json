@@ -53,5 +53,17 @@
     "presence_penalty": 0.0,
     "max_tokens": 1000,
     "context_limit": 10
+  },
+  "Local": {
+    "api_key": "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",
+    "api_url": "http://127.0.0.1:5000/v1",
+    "model": "local",
+    "system_prompt": "You are a professional translator. Translate the following text from its source language to the target language. Return your answer in the following format:\n<|1|> translated text for segment 1\n<|2|> translated text for segment 2\nand so on. Provide only the translated text lines, each preceded by its tag.",
+    "temperature": 0.4,
+    "top_p": 1.0,
+    "frequency_penalty": 0.0,
+    "presence_penalty": 0.0,
+    "max_tokens": 1000,
+    "context_limit": 100
   }
 }

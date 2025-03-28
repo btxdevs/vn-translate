@@ -488,7 +488,7 @@ class TranslationTab(BaseTab):
 
 
     def on_preset_selected(self, event=None):
-        """Load the selected preset into the UI fields, BUT keep UI API key if already entered."""
+        """Load the selected preset into the UI fields."""
         preset_name = self.preset_combo.get()
         if not preset_name or preset_name not in self.translation_presets:
             # Keep current UI values if selection is invalid
@@ -500,12 +500,10 @@ class TranslationTab(BaseTab):
 
         try:
             # --- Load preset values into UI ---
-            # Preserve API Key if user has entered one, otherwise load from preset
-            current_api_key = self.api_key_entry.get().strip()
+            # ALWAYS load the saved API key for the selected preset
             preset_api_key = preset.get("api_key", "")
             self.api_key_entry.delete(0, tk.END)
-            self.api_key_entry.insert(0, current_api_key if current_api_key else preset_api_key)
-
+            self.api_key_entry.insert(0, preset_api_key) # Changed logic here
 
             self.api_url_entry.delete(0, tk.END)
             self.api_url_entry.insert(0, preset.get("api_url", ""))
@@ -690,10 +688,13 @@ class TranslationTab(BaseTab):
         if not texts_to_translate:
             print("No stable text available to translate.")
             self.app.update_status("No stable text to translate.")
-            self.translation_display.config(state=tk.NORMAL)
-            self.translation_display.delete(1.0, tk.END)
-            self.translation_display.insert(tk.END, "[No stable text detected]")
-            self.translation_display.config(state=tk.DISABLED)
+            try: # Protect UI updates
+                if self.translation_display.winfo_exists():
+                    self.translation_display.config(state=tk.NORMAL)
+                    self.translation_display.delete(1.0, tk.END)
+                    self.translation_display.insert(tk.END, "[No stable text detected]")
+                    self.translation_display.config(state=tk.DISABLED)
+            except tk.TclError: pass
             if hasattr(self.app, 'overlay_manager'):
                 self.app.overlay_manager.clear_all_overlays()
             return
@@ -702,10 +703,13 @@ class TranslationTab(BaseTab):
 
         status_msg = "Translating..." if not force_recache else "Forcing retranslation..."
         self.app.update_status(status_msg)
-        self.translation_display.config(state=tk.NORMAL)
-        self.translation_display.delete(1.0, tk.END)
-        self.translation_display.insert(tk.END, f"{status_msg}\n")
-        self.translation_display.config(state=tk.DISABLED)
+        try: # Protect UI updates
+            if self.translation_display.winfo_exists():
+                self.translation_display.config(state=tk.NORMAL)
+                self.translation_display.delete(1.0, tk.END)
+                self.translation_display.insert(tk.END, f"{status_msg}\n")
+                self.translation_display.config(state=tk.DISABLED)
+        except tk.TclError: pass
 
         if hasattr(self.app, 'overlay_manager'):
             for roi_name in texts_to_translate:
@@ -718,7 +722,7 @@ class TranslationTab(BaseTab):
                     hwnd=current_hwnd,
                     preset=config,
                     target_language=config["target_language"],
-                    additional_context=config["additional_context"],
+                    additional_context=config["additional_context"], # Context from widget passed in config
                     context_limit=config.get("context_limit", 10),
                     force_recache=force_recache # Pass the flag
                 )
@@ -737,7 +741,9 @@ class TranslationTab(BaseTab):
                 else:
                     print("Translation successful.")
                     preview_lines = []
-                    for roi in self.app.rois:
+                    # Use app's current ROI order for consistency
+                    rois_to_iterate = self.app.rois if hasattr(self.app, 'rois') else []
+                    for roi in rois_to_iterate:
                         roi_name = roi.name
                         original_text = self.app.stable_texts.get(roi_name, "")
                         translated_text = translated_segments.get(roi_name)

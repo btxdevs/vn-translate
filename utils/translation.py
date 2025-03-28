@@ -322,8 +322,8 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
         hwnd: The window handle of the game (used for cache identification).
         preset: The translation preset configuration (LLM specific parts).
         target_language: The target language code (e.g., "en", "Spanish").
-        additional_context: General instructions or context from the UI.
-        context_limit: Max number of conversational exchanges (user+assistant pairs) to keep.
+        additional_context: General instructions or context from the UI (used only for the current call).
+        context_limit: Max number of conversational exchanges (user+assistant pairs) to keep in history.
         force_recache: If True, skip cache check and force API call, then update cache.
 
     Returns:
@@ -376,31 +376,36 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
         "For example, input '<|1|> Hello\n<|2|> World' requires output '<|1|> [Translation of Hello]\n<|2|> [Translation of World]'. "
         "Output ONLY the tagged translated lines. Do NOT add introductions, explanations, apologies, or any text outside the <|n|> tags."
     )
-    messages = [{"role": "system", "content": system_content}]
+    system_message = {"role": "system", "content": system_content}
 
-    # Add context history (if any)
+    # Get context history (if any) - make a copy
     global context_messages
-    context_to_send = []
-    if context_messages:
-        # Make a copy to avoid modifying the global list during iteration/logging
-        context_to_send = list(context_messages)
-        messages.extend(context_to_send)
-        # print(f"[CONTEXT] Including {len(context_to_send)} messages from context history.") # Logged below now
+    history_to_send = list(context_messages)
 
-
-    # Current User Request
-    user_message_parts = []
-    # Add additional context from UI if provided
+    # --- Construct the CURRENT user message WITH additional_context ---
+    current_user_message_parts = []
     if additional_context.strip():
-        user_message_parts.append(f"Additional context: {additional_context.strip()}")
-
+        current_user_message_parts.append(f"{additional_context.strip()}")
     # The core request
-    user_message_parts.append(f"Translate these segments to {target_language}, maintaining the exact <|n|> tags:")
-    user_message_parts.append(preprocessed_text_for_llm)
+    current_user_message_parts.append(f"Translate these segments to {target_language}, maintaining the exact <|n|> tags:")
+    current_user_message_parts.append(preprocessed_text_for_llm)
+    current_user_content_with_context = "\n\n".join(current_user_message_parts)
+    current_user_message_for_api = {"role": "user", "content": current_user_content_with_context}
+    # --- End Construct CURRENT user message ---
 
-    user_content = "\n\n".join(user_message_parts)
-    current_user_message = {"role": "user", "content": user_content}
-    messages.append(current_user_message)
+    # --- Construct the user message to be SAVED in HISTORY (WITHOUT additional_context) ---
+    history_user_message_parts = [
+        f"Translate these segments to {target_language}, maintaining the exact <|n|> tags:",
+        preprocessed_text_for_llm
+    ]
+    history_user_content = "\n\n".join(history_user_message_parts)
+    history_user_message = {"role": "user", "content": history_user_content}
+    # --- End Construct user message for HISTORY ---
+
+
+    # Combine messages for the API call
+    messages_for_api = [system_message] + history_to_send + [current_user_message_for_api]
+
 
     # 4. Prepare API Payload
     # Validate required preset fields
@@ -412,7 +417,7 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
 
     payload = {
         "model": preset["model"],
-        "messages": messages,
+        "messages": messages_for_api, # Use the combined list
         "temperature": preset.get("temperature", 0.3),
         "max_tokens": preset.get("max_tokens", 1000)
     }
@@ -433,17 +438,17 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
     for key, value in payload.items():
         if key != "messages":
             print(f"  - {key}: {value}")
-    print(f"[API] Messages ({len(messages)} total):")
+    print(f"[API] Messages ({len(messages_for_api)} total):")
     # Log system prompt presence without full content potentially
-    if messages[0]['role'] == 'system':
+    if messages_for_api[0]['role'] == 'system':
         print(f"  - [system] (System prompt configured)")
     # Log context messages (if any)
-    if context_to_send:
-        print(f"  - [CONTEXT HISTORY - {len(context_to_send)} messages]:")
-        for msg in context_to_send:
+    if history_to_send:
+        print(f"  - [CONTEXT HISTORY - {len(history_to_send)} messages]:")
+        for msg in history_to_send:
             print(f"    - {format_message_for_log(msg)}")
-    # Log the current user message
-    print(f"  - {format_message_for_log(current_user_message)}")
+    # Log the current user message (the one with additional context)
+    print(f"  - {format_message_for_log(current_user_message_for_api)}")
     print("-" * 55)
     # --- End LLM Request Logging ---
 
@@ -519,14 +524,24 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
         return final_translations
 
     # 8. Update Context and Cache
-    # Add the successful exchange to context
-    current_assistant_message = {"role": "assistant", "content": response_text}
-    # Add user message first, then assistant response (calls add_context_message which handles trimming)
-    add_context_message(current_user_message, context_limit)
-    add_context_message(current_assistant_message, context_limit)
+    # --- Check if the input text is the same as the last user message in history ---
+    add_to_history = True
+    if len(context_messages) >= 2: # Need at least one user/assistant pair to compare
+        last_user_message_in_history = context_messages[-2] # Second to last is the previous user msg
+        if last_user_message_in_history.get('role') == 'user':
+            if last_user_message_in_history.get('content') == history_user_message.get('content'):
+                add_to_history = False
+                print("[CONTEXT] Input identical to previous user message. Skipping history update.")
 
-    # Add to cache using the key generated earlier and the game-specific file
-    # This happens regardless of force_recache flag, overwriting previous entry
+    if add_to_history:
+        # Add the exchange to context, using the user message WITHOUT additional_context
+        current_assistant_message = {"role": "assistant", "content": response_text}
+        add_context_message(history_user_message, context_limit) # Add the simplified user message
+        add_context_message(current_assistant_message, context_limit) # Add the assistant response
+    # --- End Update Context ---
+
+    # Add/Update cache using the key generated earlier and the game-specific file
+    # This happens regardless of force_recache flag or history update skip, overwriting previous entry
     set_cache_translation(cache_key, final_translations, cache_file_path)
     print(f"[CACHE] Translation cached/updated successfully in {cache_file_path.name}")
 

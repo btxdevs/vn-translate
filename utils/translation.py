@@ -1,50 +1,40 @@
-# --- START OF FILE utils/translation.py ---
-
 import json
 import re
 import os
-from openai import OpenAI, APIError # Import APIError for specific handling
+from openai import OpenAI, APIError
 from pathlib import Path
-import hashlib # For cache key generation
-import time # For potential corrupted cache backup naming
-from utils.capture import get_executable_details # Import the new function
+import hashlib
+import time
+from utils.capture import get_executable_details
 
-# File-based cache settings
-APP_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) # Get app root directory
+APP_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CACHE_DIR = APP_DIR / "cache"
-CONTEXT_DIR = APP_DIR / "context_history" # NEW: Directory for context files
+CONTEXT_DIR = APP_DIR / "context_history"
 
-# Context management (global list - represents the currently loaded context)
 context_messages = []
 
-# --- Logging Helper ---
 def format_message_for_log(message):
-    """Formats a message dictionary for concise logging."""
     role = message.get('role', 'unknown')
     content = message.get('content', '')
     content_display = (content[:75] + '...') if len(content) > 78 else content
     content_display = content_display.replace('\n', '\\n')
     return f"[{role}] '{content_display}'"
 
-# --- Directory and Hashing ---
-
 def _ensure_cache_dir():
-    """Make sure the cache directory exists"""
     try:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
     except Exception as e:
         print(f"Error creating cache directory {CACHE_DIR}: {e}")
 
 def _ensure_context_dir():
-    """Make sure the context history directory exists"""
     try:
         CONTEXT_DIR.mkdir(parents=True, exist_ok=True)
     except Exception as e:
         print(f"Error creating context directory {CONTEXT_DIR}: {e}")
 
 def _get_game_hash(hwnd):
-    """Generates a hash based on the game's executable path and size."""
-    if not hwnd: return None # Added check
+    if not hwnd:
+        return None
     exe_path, file_size = get_executable_details(hwnd)
     if exe_path and file_size is not None:
         try:
@@ -57,12 +47,8 @@ def _get_game_hash(hwnd):
     return None
 
 def _get_cache_file_path(hwnd):
-    """Gets the specific cache file path for the given game window."""
-    # If HWND is None (e.g., for snip translate), skip caching by returning None
     if hwnd is None:
-        # print("[Cache] HWND is None, skipping cache file path generation.")
         return None
-
     game_hash = _get_game_hash(hwnd)
     if game_hash:
         return CACHE_DIR / f"{game_hash}.json"
@@ -71,8 +57,8 @@ def _get_cache_file_path(hwnd):
         return CACHE_DIR / "default_cache.json"
 
 def _get_context_file_path(hwnd):
-    """Gets the specific context history file path for the given game window."""
-    if hwnd is None: return None # Don't save context for snips
+    if hwnd is None:
+        return None
     game_hash = _get_game_hash(hwnd)
     if game_hash:
         return CONTEXT_DIR / f"{game_hash}_context.json"
@@ -80,18 +66,14 @@ def _get_context_file_path(hwnd):
         print("Warning: Could not determine game hash for context file path.")
         return None
 
-
-# --- Cache Handling ---
-
 def _load_cache(cache_file_path):
-    """Load the translation cache from the specified game file"""
-    # Path validity checked before calling
     _ensure_cache_dir()
     try:
         if cache_file_path.exists():
             with open(cache_file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-                if not content: return {}
+                if not content:
+                    return {}
                 return json.loads(content)
     except json.JSONDecodeError:
         print(f"Warning: Cache file {cache_file_path} is corrupted or empty. Starting fresh cache.")
@@ -106,10 +88,7 @@ def _load_cache(cache_file_path):
         print(f"Error loading cache from {cache_file_path}: {e}")
     return {}
 
-
 def _save_cache(cache, cache_file_path):
-    """Save the translation cache to the specified game file"""
-    # Path validity checked before calling
     _ensure_cache_dir()
     try:
         with open(cache_file_path, 'w', encoding='utf-8') as f:
@@ -118,11 +97,9 @@ def _save_cache(cache, cache_file_path):
         print(f"Error saving cache to {cache_file_path}: {e}")
 
 def clear_current_game_cache(hwnd):
-    """Clear the translation cache for the currently selected game."""
     cache_file_path = _get_cache_file_path(hwnd)
     if not cache_file_path:
         return "Could not identify game to clear cache (or cache skipped)."
-
     if cache_file_path.exists():
         try:
             os.remove(cache_file_path)
@@ -136,7 +113,6 @@ def clear_current_game_cache(hwnd):
         return "Cache for the current game was already empty."
 
 def clear_all_cache():
-    """Clear all translation cache files in the cache directory."""
     _ensure_cache_dir()
     cleared_count = 0
     errors = []
@@ -150,7 +126,6 @@ def clear_all_cache():
                 except Exception as e:
                     errors.append(item.name)
                     print(f"Error deleting cache file {item.name}: {e}")
-
         if errors:
             return f"Cleared {cleared_count} cache files. Errors deleting: {', '.join(errors)}."
         elif cleared_count > 0:
@@ -161,23 +136,17 @@ def clear_all_cache():
         print(f"Error iterating cache directory {CACHE_DIR}: {e}")
         return f"Error accessing cache directory: {e}"
 
-# --- Context History Handling ---
-
 def _load_context(hwnd):
-    """Loads context history from the game-specific file into the global list."""
     global context_messages
-    context_messages = [] # Start fresh before loading
-    if hwnd is None: # Don't load if no specific game (e.g., snip)
+    context_messages = []
+    if hwnd is None:
         print("[CONTEXT] HWND is None, skipping context load.")
         return
-
     _ensure_context_dir()
     context_file_path = _get_context_file_path(hwnd)
-
     if not context_file_path:
         print("[CONTEXT] Cannot load context, failed to get file path.")
         return
-
     if context_file_path.exists():
         try:
             with open(context_file_path, 'r', encoding='utf-8') as f:
@@ -199,35 +168,26 @@ def _load_context(hwnd):
         print(f"[CONTEXT] No context file found for current game ({context_file_path.name}). Starting fresh history.")
 
 def _save_context(hwnd):
-    """Saves the current global context_messages to the game-specific file."""
     global context_messages
-    if hwnd is None: # Don't save if no specific game
-        # print("[CONTEXT] HWND is None, skipping context save.")
+    if hwnd is None:
         return
-
     _ensure_context_dir()
     context_file_path = _get_context_file_path(hwnd)
-
     if not context_file_path:
         print("[CONTEXT] Cannot save context, failed to get file path.")
         return
-
     try:
         with open(context_file_path, 'w', encoding='utf-8') as f:
             json.dump(context_messages, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print(f"[CONTEXT] Error saving context to {context_file_path.name}: {e}")
 
-
 def reset_context(hwnd):
-    """Reset the global translation context history AND delete the game-specific file."""
     global context_messages
     context_messages = []
     print("[CONTEXT] In-memory context history reset.")
-
     if hwnd is None:
         return "Context history reset (no game specified to delete file)."
-
     context_file_path = _get_context_file_path(hwnd)
     if context_file_path and context_file_path.exists():
         try:
@@ -242,72 +202,52 @@ def reset_context(hwnd):
     else:
         return "Context history reset (could not determine file path)."
 
-
 def add_context_message(message, context_limit):
-    """Add a message to the global translation context history, enforcing the limit."""
     global context_messages
     try:
         limit = int(context_limit)
-        if limit <= 0: limit = 1
-    except (ValueError, TypeError): limit = 10
-
+        if limit <= 0:
+            limit = 1
+    except (ValueError, TypeError):
+        limit = 10
     context_messages.append(message)
     max_messages = limit * 2
-    current_length = len(context_messages)
-
-    if current_length > max_messages:
+    if len(context_messages) > max_messages:
         context_messages = context_messages[-max_messages:]
-        new_length = len(context_messages)
-        print(f"[CONTEXT] History limit ({max_messages} msgs / {limit} exchanges) exceeded ({current_length} msgs). Trimmed to {new_length}.")
-
-
-# --- Translation Core Logic ---
+        print(f"[CONTEXT] History limit exceeded. Trimmed to {len(context_messages)} messages.")
 
 def get_cache_key(text, target_language):
-    """
-    Generate a unique cache key based ONLY on the input text and target language.
-    """
     hasher = hashlib.sha256()
     hasher.update(text.encode('utf-8'))
     hasher.update(target_language.encode('utf-8'))
     return hasher.hexdigest()
 
 def get_cached_translation(cache_key, cache_file_path):
-    """Get a cached translation if it exists from the specific game cache file."""
-    if not cache_file_path: return None # Skip if no valid path (e.g., snip)
+    if not cache_file_path:
+        return None
     cache = _load_cache(cache_file_path)
     return cache.get(cache_key)
 
 def set_cache_translation(cache_key, translation, cache_file_path):
-    """Cache a translation result to the specific game cache file."""
-    if not cache_file_path: return # Skip if no valid path
+    if not cache_file_path:
+        return
     cache = _load_cache(cache_file_path)
     cache[cache_key] = translation
     _save_cache(cache, cache_file_path)
 
-
 def parse_translation_output(response_text, original_tag_mapping):
-    """
-    Parse the translation output from a tagged format (<|n|>)
-    and map it back to the original ROI names using the tag_mapping.
-    """
     parsed_segments = {}
-    # Try the primary pattern first (handles multi-line content within tags)
     pattern = r"<\|(\d+)\|>(.*?)(?=<\|\d+\|>|$)"
     matches = re.findall(pattern, response_text, re.DOTALL | re.MULTILINE)
-
     if matches:
         for segment_number, content in matches:
             original_roi_name = original_tag_mapping.get(segment_number)
             if original_roi_name:
-                cleaned_content = content.strip()
-                # Sometimes models add extra closing tags, remove them
-                cleaned_content = re.sub(r'<\|\d+\|>$', '', cleaned_content).strip()
+                cleaned_content = re.sub(r'<\|\d+\|>$', '', content.strip()).strip()
                 parsed_segments[original_roi_name] = cleaned_content
             else:
                 print(f"Warning: Received segment number '{segment_number}' which was not in the original mapping.")
     else:
-        # Fallback: Try simpler line-based pattern if the first fails
         line_pattern = r"^\s*<\|(\d+)\|>\s*(.*)$"
         lines = response_text.strip().split('\n')
         found_line_match = False
@@ -320,40 +260,26 @@ def parse_translation_output(response_text, original_tag_mapping):
                 if original_roi_name:
                     parsed_segments[original_roi_name] = content.strip()
                 else:
-                    print(f"Warning: Received segment number '{segment_number}' (line match) which was not in original mapping.")
-
-        # Final fallback: If no tags found at all and only one expected segment
+                    print(f"Warning: Received segment number '{segment_number}' which was not in original mapping.")
         if not found_line_match and len(original_tag_mapping) == 1 and not response_text.startswith("<|"):
             first_tag = next(iter(original_tag_mapping))
             first_roi = original_tag_mapping[first_tag]
-            print(f"[LLM PARSE] Warning: Response had no tags, assuming plain text response for single ROI '{first_roi}'.")
+            print(f"[LLM PARSE] Warning: No tags found; assuming plain text for ROI '{first_roi}'.")
             parsed_segments[first_roi] = response_text.strip()
         elif not found_line_match and not matches:
-            # If multiple segments expected but no tags found
-            print("[LLM PARSE] Failed to parse any <|n|> segments from response and multiple segments expected.")
+            print("[LLM PARSE] Failed to parse any segments.")
             return {"error": f"Error: Unable to extract formatted translation.\nRaw response:\n{response_text}"}
-
-
-    # Check for missing segments
     missing_rois = set(original_tag_mapping.values()) - set(parsed_segments.keys())
     if missing_rois:
-        print(f"[LLM PARSE] Warning: Translation response missing segments for ROIs: {', '.join(missing_rois)}")
+        print(f"[LLM PARSE] Warning: Missing segments for ROIs: {', '.join(missing_rois)}")
         for roi_name in missing_rois:
             parsed_segments[roi_name] = "[Translation Missing]"
-
-    # If after all attempts, parsed_segments is still empty but we expected something
     if not parsed_segments and original_tag_mapping:
-        print("[LLM PARSE] Error: Failed to parse any segments despite expecting tags.")
+        print("[LLM PARSE] Error: Failed to parse any segments.")
         return {"error": f"Error: Failed to extract any segments.\nRaw response:\n{response_text}"}
-
-
     return parsed_segments
 
-
 def preprocess_text_for_translation(aggregated_text):
-    """
-    Convert input text with tags like [tag]: content to the numbered format <|1|> content.
-    """
     lines = aggregated_text.strip().split('\n')
     preprocessed_lines = []
     tag_mapping = {}
@@ -371,79 +297,54 @@ def preprocess_text_for_translation(aggregated_text):
             else:
                 print(f"Skipping empty content for ROI: {roi_name}")
         else:
-            print(f"Ignoring line, does not match '[ROI]: content' format: {line}")
+            print(f"Ignoring line (format mismatch): {line}")
     if not tag_mapping:
-        print("Warning: No lines matched the '[ROI]: content' format during preprocessing.")
+        print("Warning: No valid lines found during preprocessing.")
     return '\n'.join(preprocessed_lines), tag_mapping
 
-
-# MODIFIED translate_text function signature
 def translate_text(aggregated_input_text, hwnd, preset, target_language="en", additional_context="", context_limit=10, force_recache=False, skip_cache=False, skip_history=False):
-    """
-    Translate the given text using an OpenAI-compatible API client, using game-specific caching and context.
-    Args:
-        ... existing args ...
-        skip_cache (bool): If True, bypass cache read/write entirely.
-        skip_history (bool): If True, do not add this translation to the context history.
-    """
-    # 0. Determine Cache and Context File Paths (may be None if hwnd is None or skip_cache)
     cache_file_path = None if skip_cache else _get_cache_file_path(hwnd)
-    # context_file_path (not needed directly, _save_context checks hwnd/skip_history implicitly)
-
-    # If we need to check cache later, and couldn't get a path (and not skipping), error out.
     if not skip_cache and not cache_file_path and hwnd is not None:
-        print("Error: Cannot proceed with cached translation without a valid game identifier.")
+        print("Error: No valid cache file path.")
         return {"error": "Could not determine cache file path for the game."}
-
-    # 1. Preprocess input text to <|n|> format and get mapping
     preprocessed_text_for_llm, tag_mapping = preprocess_text_for_translation(aggregated_input_text)
-
     if not preprocessed_text_for_llm or not tag_mapping:
-        print("No valid text segments found after preprocessing. Nothing to translate.")
+        print("No valid text segments found after preprocessing.")
         return {}
-
-    # 2. Check Cache (if not skipping and not forcing recache)
     cache_key = get_cache_key(preprocessed_text_for_llm, target_language)
     if not skip_cache and not force_recache:
         cached_result = get_cached_translation(cache_key, cache_file_path)
         if cached_result:
-            # Basic validation of cached result format
-            if isinstance(cached_result, dict) and not 'error' in cached_result:
-                # Check if all expected ROIs are present in cache
+            if isinstance(cached_result, dict) and 'error' not in cached_result:
                 if all(roi_name in cached_result for roi_name in tag_mapping.values()):
-                    print(f"[CACHE] HIT for key: {cache_key[:10]}... in {cache_file_path.name if cache_file_path else 'N/A'}")
+                    print(f"[CACHE] HIT for key: {cache_key[:10]}...")
                     return cached_result
                 else:
-                    print("[CACHE] WARN: Cached result incomplete, fetching fresh translation.")
+                    print("[CACHE] WARN: Cached result incomplete.")
             else:
-                print("[CACHE] WARN: Cached result format mismatch or error, fetching fresh translation.")
-        else: # Cache miss
-            print(f"[CACHE] MISS for key: {cache_key[:10]}... in {cache_file_path.name if cache_file_path else 'N/A'}")
+                print("[CACHE] WARN: Cached result format error.")
+        else:
+            print(f"[CACHE] MISS for key: {cache_key[:10]}...")
     elif skip_cache:
-        print(f"[CACHE] SKIP requested (skip_cache=True)")
+        print("[CACHE] SKIP requested")
     elif force_recache:
-        print(f"[CACHE] SKIP requested (force_recache=True) for key: {cache_key[:10]}...")
+        print(f"[CACHE] Force recache for key: {cache_key[:10]}...")
 
-
-    # 3. Prepare messages for API
     system_prompt = preset.get('system_prompt', "You are a translator.")
     system_content = (
         f"{system_prompt}\n\n"
         f"Translate the following text segments into {target_language}. "
         "Input segments are tagged like <|1|>, <|2|>, etc. "
-        "Your response MUST replicate this format exactly, using the same tags for the corresponding translated segments. "
-        "For example, input '<|1|> Hello\n<|2|> World' requires output '<|1|> [Translation of Hello]\n<|2|> [Translation of World]'. "
-        "Output ONLY the tagged translated lines. Do NOT add introductions, explanations, apologies, or any text outside the <|n|> tags."
+        "Your response MUST replicate this format exactly, using the same tags. "
+        "Output ONLY the tagged translated lines."
     )
     system_message = {"role": "system", "content": system_content}
 
-    # Get context history (only if not skipping history) - uses the current global context_messages
     history_to_send = []
     if not skip_history:
-        global context_messages # Access global list
-        history_to_send = list(context_messages) # Send a copy
+        global context_messages
+        history_to_send = list(context_messages)
 
-    # Construct the CURRENT user message WITH additional_context
     current_user_message_parts = []
     if additional_context.strip():
         current_user_message_parts.append(f"Additional context: {additional_context.strip()}")
@@ -452,7 +353,6 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
     current_user_content_with_context = "\n\n".join(current_user_message_parts)
     current_user_message_for_api = {"role": "user", "content": current_user_content_with_context}
 
-    # Construct the user message to be SAVED in HISTORY (if not skipping history)
     history_user_message = None
     if not skip_history:
         history_user_message_parts = [
@@ -462,11 +362,8 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
         history_user_content = "\n\n".join(history_user_message_parts)
         history_user_message = {"role": "user", "content": history_user_content}
 
-    # Combine messages for the API call
     messages_for_api = [system_message] + history_to_send + [current_user_message_for_api]
 
-
-    # 4. Prepare API Payload
     if not preset.get("model") or not preset.get("api_url"):
         missing = [f for f in ["model", "api_url"] if not preset.get(f)]
         errmsg = f"Missing required preset fields: {', '.join(missing)}"
@@ -486,25 +383,23 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
             except (ValueError, TypeError):
                 print(f"Warning: Invalid value for parameter '{param}': {preset[param]}. Skipping.")
 
-
-    # --- LLM Request Logging ---
     print("-" * 20 + " LLM Request " + "-" * 20)
     print(f"[API] Endpoint: {preset.get('api_url')}")
     print(f"[API] Model: {preset['model']}")
     print(f"[API] Payload Parameters (excluding messages):")
     for key, value in payload.items():
-        if key != "messages": print(f"  - {key}: {value}")
+        if key != "messages":
+            print(f"  - {key}: {value}")
     print(f"[API] Messages ({len(messages_for_api)} total):")
-    if messages_for_api[0]['role'] == 'system': print(f"  - [system] (System prompt configured)")
+    if messages_for_api[0]['role'] == 'system':
+        print("  - [system] (System prompt configured)")
     if history_to_send:
-        print(f"  - [CONTEXT HISTORY - {len(history_to_send)} messages]:")
-        for msg in history_to_send: print(f"    - {format_message_for_log(msg)}")
+        print(f"  - [CONTEXT HISTORY - {len(history_to_send)} messages]")
+        for msg in history_to_send:
+            print(f"    - {format_message_for_log(msg)}")
     print(f"  - {format_message_for_log(current_user_message_for_api)}")
     print("-" * 55)
-    # --- End LLM Request Logging ---
 
-
-    # 5. Initialize API Client
     try:
         api_key = preset.get("api_key") or None
         client = OpenAI(base_url=preset.get("api_url"), api_key=api_key)
@@ -512,78 +407,56 @@ def translate_text(aggregated_input_text, hwnd, preset, target_language="en", ad
         print(f"[API] Error creating API client: {e}")
         return {"error": f"Error creating API client: {e}"}
 
-    # 6. Make API Request
     response_text = None
     try:
         completion = client.chat.completions.create(**payload)
         if not completion.choices or not completion.choices[0].message or completion.choices[0].message.content is None:
-            print("[API] Error: Invalid response structure received from API.")
-            try: print(f"[API] Raw Response Object: {completion}")
-            except Exception as log_err: print(f"[API] Error logging raw response object: {log_err}")
+            print("[API] Error: Invalid response structure.")
             return {"error": "Invalid response structure received from API."}
         response_text = completion.choices[0].message.content.strip()
-
-        # --- LLM Response Logging ---
         print("-" * 20 + " LLM Response " + "-" * 20)
         print(f"[API] Raw Response Text ({len(response_text)} chars):")
         print(response_text)
         print("-" * 56)
-        # --- End LLM Response Logging ---
-
     except APIError as e:
         error_message = str(e)
         status_code = getattr(e, 'status_code', 'N/A')
         try:
             error_body = json.loads(getattr(e, 'body', '{}') or '{}')
             detail = error_body.get('error', {}).get('message', '')
-            if detail: error_message = detail
-        except: pass
-        log_msg = f"[API] APIError during translation request: Status {status_code}, Error: {error_message}"
-        print(log_msg)
-        print(f"[API] Request Model: {payload.get('model')}")
+            if detail:
+                error_message = detail
+        except:
+            pass
+        print(f"[API] APIError: Status {status_code}, Error: {error_message}")
         return {"error": f"API Error ({status_code}): {error_message}"}
     except Exception as e:
         error_message = str(e)
-        log_msg = f"[API] Error during translation request: {error_message}"
-        print(log_msg)
-        import traceback
-        traceback.print_exc()
+        print(f"[API] Error during translation request: {error_message}")
         return {"error": f"Error during API request: {error_message}"}
 
-
-    # 7. Parse LLM Response
     final_translations = parse_translation_output(response_text, tag_mapping)
-
     if 'error' in final_translations:
-        print("[LLM PARSE] Parsing failed after receiving response.")
+        print("[LLM PARSE] Parsing failed.")
         return final_translations
 
-    # 8. Update Context and Cache (conditionally)
     if not skip_history and history_user_message:
         add_to_history = True
-        # Check if the input text is the same as the last user message in history
         if len(context_messages) >= 2:
             last_user_message_in_history = context_messages[-2]
-            if last_user_message_in_history.get('role') == 'user':
-                if last_user_message_in_history.get('content') == history_user_message.get('content'):
-                    add_to_history = False
-                    print("[CONTEXT] Input identical to previous user message. Skipping history update.")
-
+            if last_user_message_in_history.get('role') == 'user' and last_user_message_in_history.get('content') == history_user_message.get('content'):
+                add_to_history = False
+                print("[CONTEXT] Input identical to previous user message. Skipping history update.")
         if add_to_history:
             current_assistant_message = {"role": "assistant", "content": response_text}
             add_context_message(history_user_message, context_limit)
             add_context_message(current_assistant_message, context_limit)
-            _save_context(hwnd) # Save updated context (hwnd check inside _save_context)
-        # --- End Update Context ---
+            _save_context(hwnd)
 
-    # Update cache ONLY if not skipping cache
     if not skip_cache and cache_file_path:
         set_cache_translation(cache_key, final_translations, cache_file_path)
-        print(f"[CACHE] Translation cached/updated successfully in {cache_file_path.name}")
+        print(f"[CACHE] Cached translation in {cache_file_path.name}")
     elif not skip_cache and not cache_file_path:
         print("[CACHE] Warning: Could not cache translation (invalid path).")
 
-
     return final_translations
-
-# --- END OF FILE utils/translation.py ---

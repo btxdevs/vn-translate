@@ -100,7 +100,7 @@ class VisualNovelTranslatorApp:
 
         self.text_history = {}
         self.stable_texts = {}
-        self.stable_threshold = get_setting("stable_threshold", 3)
+        self.stable_threshold = get_setting("stable_threshold", 5)
         self.max_display_width = get_setting("max_display_width", 800)
         self.max_display_height = get_setting("max_display_height", 600)
         self.last_status_message = ""

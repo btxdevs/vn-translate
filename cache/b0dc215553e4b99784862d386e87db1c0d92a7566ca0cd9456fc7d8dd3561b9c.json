@@ -1,42 +1,443 @@
 {
-  "ac33c95b43eddc42ba26a94fb1dfa5b1e83e3604e9d73f5e5bccd3191e33eeb8": {
+  "8cf201011fe3af22ffc2bd8fe105378818d19c063fb11309844e4841c2f8b616": {
     "char": "Yoruko",
-    "dialogue": "“Reality, a world woven from printed characters and the scent of paper.”"
+    "dialogue": "\"Reality, the scent of paper woven with letters\""
   },
-  "a7b3dad29654f120324d0d8e0ebd3b93956eef029df8baa158a0dcf53ffd3bb5": {
+  "7bb5f349a5fa871919bcc9d7d39ce3f10f15b8bb73f089cd0b87b4a4b604faf6": {
     "char": "Yoruko",
-    "dialogue": "“Imagination, a truth that distorts and wavers the boundaries.”"
+    "dialogue": "\"Fantasy, truth swaying the boundary line\""
   },
-  "3fb65273367344180bb83e378b09aff70c891d5984e8e458815f8486f4ee0444": {
-    "dialogue": "Surrounded by a small world, buried, sinking… even so, the boundaries."
+  "c1fb6ed46dfa442adc4f1c81d2267dffd0683aac805ce22180400f06b5d1e97c": {
+    "dialogue": "Surrounded by a small world, buried and sinking, yet I leave myself to the reality that has lost its boundaries."
   },
-  "6b3a10394e5f39c812e69343020939006fdce7088ec884b162f60e5afdb49a11": {
-    "dialogue": "The white bird that chose to remain in its cage of its own accord, withering away…"
+  "0117409b3979e38ca747131239da2af818e87e6934e38cad5e5bdecd8ec0a9fe": {
+    "dialogue": "The white dove, choosing to stay in its cage of its own will, refuses to spread its wings until it withers away."
   },
-  "b1ed7493900fabae923d8485f92ae1de9cdebd14f0ead748e66a5c1929ea7529": {
-    "dialogue": "She never held a longing to dance in the vast sky."
+  "4e9df0683d8a290d294aea6b319688bc5d5217bbb10292570818aefd7ac870e8": {
+    "dialogue": "No one admired the two dancing in the vast sky."
   },
-  "e9f4dc8a61c11139ce44e22eefffe96ccd9e37f1e995d1a1f4fd0b929dec29b3": {
-    "dialogue": "She never held a longing to dance in the vast sky."
+  "c964ffe560c520b1dbc5f4509f29d606d757a39da91d3714b5cd24c90347859a": {
+    "dialogue": "No one admired the two dancing in the vast sky."
   },
-  "7159911a2bfe9276a06fbec079af275c57cde242b3a63d5e87531b8ec695dc9a": {
+  "51e4254d7b548c0930f42db9379ebebdf955e14afdb4fe53c1ac9ccae5afcd06": {
     "char": "Yoruko",
-    "dialogue": "“I wonder how many more books I’ll be able to read from now on…”"
+    "dialogue": "[Semitsutsu-Za no Tahan no Aka-chan ya Manabi-ryoku no Shokugi no Nenchu no Pi ni \""
   },
-  "b81e81a3887308eb8c442f0dc23b5141533f304b5b2e2d90e2bdd3f025b58dbc": {
-    "dialogue": "All the stories that exist in this world, everything."
+  "f630199451c25f7cbf10200145e8b3deccb189b3ab89fe76862db0b1bb49b638": {
+    "dialogue": "Stories that exist throughout the entire world"
   },
-  "d1663802bff21e4cf8da26066e6301c4665a7d42a6f9a89f6eb8cd3561571a06": {
-    "dialogue": "Simply turning the pages of the hedge, with no other purpose or enjoyment."
+  "1e996df17969f73982d6e3f6e45ae29c9fb738dc2209db41fac463c6c326b1e3": {
+    "dialogue": "All the stories in the world exist within this second world. Continuing to read them was my life."
   },
-  "67bdc630580d4d6d9d4e3031f6c27121eda463e4a558ee8be0900cca33e75ae1": {
-    "dialogue": "She could understand, to some extent, how peculiar it might seem to others."
+  "b53414c15003bf92f5ac9964eefa2aae9495f92033f81e99e3dc7bad426a62c0": {
+    "dialogue": "Simply, with no other purpose or joy,"
   },
-  "8d1391052113949cf69dcde57ee6c919a128f5f3e3c88639eceb017ef741cf26": {
+  "eb0402a3765504e8d9bfc2fbb271ec3485517665b1944c8d4158ddbeffaaa4ae": {
+    "dialogue": "To others, it might seem like a strange way to live. I understood that."
+  },
+  "eaa1a7443bc1d346ce10bc52f164117978734faaad068507b6bf7da7ef9d4214": {
     "char": "Yoruko",
-    "dialogue": "“It’s like a candle of life.”"
+    "dialogue": "[Like a candle of life]"
   },
-  "78e80942a80e78cf09fb9057234432dc037117765db56a0ff2d2acb93e18d945": {
-    "dialogue": "She feels a sense of accomplishment with each book she finishes."
+  "b7386f1cfb2c2584c6293df523958f9079f3eb78425d6b9be12a25005e10cfcb": {
+    "dialogue": "Each time I finish a book, I feel a sense of accomplishment"
+  },
+  "e6d8240f8ccd6db7f816bd6b0131965b2f236c2504424b1839cf491ed098cbfc": {
+    "dialogue": "Each time I finish a book, I feel a sense of accomplishment. As one story ends, my life also approaches its end."
+  },
+  "880fa274d03e64174a31143d3c6b675727c0d15fe58a5b5eeb5607767599c911": {
+    "dialogue": "For me, lifespan is not measured in years or decades, but in the number of books left to read."
+  },
+  "6cc8cbbc6eb1cfcbf9bd7562204ddcd747ce209b9805a24cc6c6103a0903dae5": {
+    "dialogue": "What will happen when I finish reading all the books in this second library?"
+  },
+  "9c7ec1ba388e5c1c442d4de3aec1a5b849c645b661030400d1ca273d9898e771": {
+    "char": "Yoruko",
+    "dialogue": "\"Even so\""
+  },
+  "afaec49add7219f71ee0fd67edaf465da7b6bc8aa4128f863575cb5092e4419e": {
+    "dialogue": "I have no regrets about such a life."
+  },
+  "d57b3bbc6e7de0371ca302aeec987b82ce333c87da82d76c2a42e5b8e7e024a7": {
+    "dialogue": "On the contrary, I think it was fulfilling."
+  },
+  "3491cddc1062ca6139e6c51821723faaae9bf4e4152d40e508d8521225bb6d12": {
+    "dialogue": "The world inside the cage, where only tongue characters exist, seemed even more wonderful than the world outside."
+  },
+  "f4537abedcb9ddd99503ea6a82e59a935025c09242d409a2d84116efa577fb9f": {
+    "dialogue": "This place is part of my kind and wonderful world"
+  },
+  "c660d4123aef425e3fa3e768599f47e985bb3fe1be0dfc9f13a291f6bb2d37b0": {
+    "dialogue": "This place is part of my kind and wonderful world. The fantasy library hidden deep in the forest shows me sweet happiness."
+  },
+  "6d1902874d66ea2ce04d20ebac9d6addac7724e2758a3db3b28a2317a24f4d86": {
+    "dialogue": "Reality and unreality are mixed together, warping common sense"
+  },
+  "fbb5e27da623fa6da578731bf684770b7bca5d6ef82277c045db399036f0df28": {
+    "dialogue": "Reality and unreality blend together, warping common sense. Magical stories, miracle-like stories, appear in reality."
+  },
+  "85c3c5c5826e572c03a16a37d13a1441be8bca71cfa62c266aa528dd350331d1": {
+    "dialogue": "If asked who did it, we'll all answer in unison"
+  },
+  "bacab1562de4e36b3e5164e7a1ee19d95cc6d3cba369094ca2cc4fb2c42f5538": {
+    "dialogue": "The white dove that chose to stay with Ryo, fluttered its chest and began to measure the chances of a miracle."
+  },
+  "42a123793beae534130568716eb37e6ef71c8d57e6149e6b4f6a01a247d5baa6": {
+    "dialogue": "A certain book collected in the Fantasy Library."
+  },
+  "7a3f910571141350810dc35d33d780d52161ae7d61486b96c138afe10985a0d4": {
+    "dialogue": "It was the book itself, not the reader or the author, that embodied magic and miracles."
+  },
+  "5bd3bc259d57f9fe5399e3d874f95cd5c708d0552f37534172a043f90f35c04f": {
+    "dialogue": "The Language Department is, \"The Book of Magic\""
+  },
+  "c0a954be5bf94ec8e2056368d84d9c81b2a6c54de72ce76e95372ce056b1f187": {
+    "dialogue": "An extraordinary object that blurs the line between reality and fantasy."
+  },
+  "730d9c8ba9cfce5defe31c6a110107ee174fb41b0364b45052ef0c6eb240832d": {
+    "dialogue": "The moment I set foot on the island"
+  },
+  "013f6ec841910da04750b791e26089e530513418ce148ac25f716fb825a0e751": {
+    "dialogue": "The moment I set foot on the island, feeling I've truly returned - I can't help but feel something welling up inside."
+  },
+  "96171ae582d3ee16ef004cb49eba45adee70ef27e1de9979d73424a9116b7060": {
+    "dialogue": "Caressed by the morning breeze, I now feel a bond deeper than nostalgia for this island, unchanged from two years ago."
+  },
+  "4be265e7177360473515f36b8eafc4b7c138e741f118d7007285562f26172041": {
+    "dialogue": "I bowed slightly to the sailor who brought me and, greedily savoring the nostalgia, took a step forward."
+  },
+  "6e5d114eb1015b40d7a9f49dc01a36322150e5344320fef6fe3c29167e477594": {
+    "dialogue": "The scent of spring, familiar yet still refreshing"
+  },
+  "642812efd3686d5e2d16fd7de67a92e5935e95bf447cf512654a8368615cfe91": {
+    "char": "Ruri",
+    "dialogue": "It's......been a while"
+  },
+  "da13aa6bd8200e5fc8116957e57e573e6d2d320c3a2c57ec75277d9164168953": {
+    "dialogue": "Two years"
+  },
+  "cec67e571b9a57391b2b380f64b0b86e74efa5c5e81b037057f3c543047572f2": {
+    "dialogue": "Two years. Put into words, it was a light phrase."
+  },
+  "30ec893916e9d7eeb68448173123704dec83da44e6281a80e41522ed3e213f95": {
+    "dialogue": "The time that had passed was not significant to me, and I had merely let it slip by aimlessly."
+  },
+  "9ceba428feba273742280c3e5593210f8b2599c2219388ec804a80d53f42dc00": {
+    "dialogue": "Not even a fragment of memory or attachment remains."
+  },
+  "2c3c2bdff5e80579ad33035ec2c638f32f211ef1a079803505d5eb84c6ba8bb2": {
+    "dialogue": "I felt as if I was being welcomed back as the sensation of the earth's touch on the soles of my feet spread through me."
+  },
+  "245d050161794128f2caac2ed5bebf0386633444b3ade00f985fdfde371587db": {
+    "dialogue": "I felt as if I was being welcomed back as the sensation of the earth's touch on the soles of my feet spread through me."
+  },
+  "cd666100f1a6c3aa9060efc871654c6fd27e93f6943593988c4f5670cfd1cac2": {
+    "dialogue": "It's strange to see myself wallowing in sorrow."
+  },
+  "a06a3278bf84ad7fe418d0b05d111ea43c462e69aa2ac665d5ca8ea2af63b2fe": {
+    "dialogue": "Using my memories as a guide, I headed to that place"
+  },
+  "39cb67e17f1d177b65655c5d385fea467fddc5acdd0abc5c650e762be2c3ca42": {
+    "dialogue": "Using my memories as a guide, the first place I should go to after returning to my hometown is that place"
+  },
+  "047411e734eb16ecdaf155aa12d20a4a0a075775dd3fcac8e566574f52f1e303": {
+    "char": "Kisaki",
+    "dialogue": "[I hate the sea. I can't stand the clingy morning breeze.]"
+  },
+  "2f68f5bf2c9c95d4bd897aa99d9f4cc2cd86e823cba5efd58852e6246493286b": {
+    "dialogue": "The first to welcome me back to the island was family"
+  },
+  "ec4aba57ef6a5e07c72b0d4f4be2e610bc3de021ece4c800f30e99fe6573d05e": {
+    "dialogue": "Her name is Tsukiyashiro Kisaki"
+  },
+  "0ef03bb4af92471756a20ffab1d1d1ed403dff0ab987c13912808a5828ed6dba": {
+    "dialogue": "Her name is Tsukiyashiro Kisaki. She is my younger sister, left with our mother after our parents separated."
+  },
+  "cb095f34c7cdb70c79431de615ad5353128ac0e0372fd90b000305897385dce3": {
+    "char": "Ruri",
+    "dialogue": "[I guess having such long hair must be difficult]"
+  },
+  "a772342cbe6db5d452a8ab0a1d47c73653c169ce763176b3114b33892475df7c": {
+    "dialogue": "Avoiding eye contact, he responds with indifference."
+  },
+  "4348ab2b35fff4dbfa27af8b896c67871dac92ca9ad03543d35961be8942336d": {
+    "dialogue": "Looking away and responding with indifference, as if it didn't matter. Our dynamics were unchanged, even after months apart."
+  },
+  "43a78f61c77d11bfbec28bf49b5f5a2f8347f6b9b380f3bc7bdd29be6d3daff0": {
+    "dialogue": "Kisaki is gazing at the horizon."
+  },
+  "34deed0a38039beeef09770ecb5e89b352f2d06f38d54428bbabefa8c224de98": {
+    "dialogue": "Chiemi is gazing at the horizon. With one hand holding back her hair that rustles in the wind, she maintains a blank expression."
+  },
+  "23248a91ab35c3a66058255a496d9c0eadd2282a0d6a7545137278d5f459b305": {
+    "char": "Kisaki",
+    "dialogue": "\"Well then, why don't we just chop it off at the shoulder?\""
+  },
+  "caf4b4411fd195d04d66d1662b8aeaadbdd0e9208c48493584453be6ac24eed5": {
+    "dialogue": "Smirking mischievously"
+  },
+  "86bb381b53d97cf54d5f982505940e2201547723b03528667fdb0fd7f3e0739d": {
+    "char": "Ruri",
+    "dialogue": "You look better with long hair, so you should keep it that way."
+  },
+  "342ee664317ad30b7af25e5137a46b8172ec4e9ab061e9cc33b218737fe98400": {
+    "char": "Kisaki",
+    "dialogue": "\"Do you really think I don't know that? Are you infatuated with my hair, Ruri?\""
+  },
+  "1b1f52394d1ecb329e74d068826792d760c8dbf22e7bcb78099505d735d7c088": {
+    "dialogue": "Gracefully brushes hair back"
+  },
+  "78ce0af9a336fea7e1a72e16482907e0f77ad1e6cbad923d88d6f738a33e63ab": {
+    "dialogue": "Gracefully brushes hair back. A provocative gaze, as if inviting."
+  },
+  "5f3fc98a006f210e6a4821a1377116f7b38643ad553729cac3650faa264d586c": {
+    "char": "Ruri",
+    "dialogue": "[What are you even saying?]"
+  },
+  "989047a7d770948a980da413eb18332b743e2d4ea80cb5be84b15a89fcf5050f": {
+    "dialogue": "Walking along the seaside promenade, careful not to slip."
+  },
+  "9ba3317558a17ec37a1a7f1c602eae692046555936bc59cabb1bb654c9805bd7": {
+    "dialogue": "Carefully walking along the seaside promenade, following Kisaki's every word would be endless."
+  },
+  "a014e2d81ff7d8b2a263fa967e804d2d15e5ffcac55469830ccb9f52af836fa5": {
+    "char": "Kisaki",
+    "dialogue": "\"How was life on the mainland? You must have been quite at ease without me around.\""
+  },
+  "fcd581aab42c5632e37f5253ace68906b044356a047a0b5bc00cbe09d5afb8ec": {
+    "dialogue": "Walking side by side, engaged in long-awaited idle chat"
+  },
+  "40e41aef0225b523f80f5a2bd78c8a6f9f13f926c6b1a60bcb6760147f788974": {
+    "char": "Ruri",
+    "dialogue": "\"Ah, every day was peaceful and wonderful.\""
+  },
+  "fb389fb558b87eb1864a2960b57e73e7b6906eacbb96d9e5d106217b8125168a": {
+    "char": "Kisaki",
+    "dialogue": "[Boring and dry]"
+  },
+  "e854453ceb26f5c9a9e42148e48034e53cbcb4088302c4650d3d71fe564649ba": {
+    "char": "Ruri",
+    "dialogue": "[It was a happy and enjoyable everyday life]"
+  },
+  "7175c572a43f4fc5cc215ff84f125e0811555bbd0f46462007e5edc55f5cc8e6": {
+    "char": "Kisaki",
+    "dialogue": "[A stream of decadent and unstimulating time]"
+  },
+  "dbb1686a3f2896e63703cd1074b92b293cbc7cfd26b3f29fee8c24281f6800cf": {
+    "char": "Ruri",
+    "dialogue": "I..... Listen up, you"
+  },
+  "998aa608222ad305efe86de7f973f72c264559ca7a522321ee530dc5259bc9ca": {
+    "dialogue": "Who do you think you are, deciding people's everyday lives for them?"
+  },
+  "028953828b07e58750170803c6a55560543ad6b7ee76f87a533ac35513e83149": {
+    "char": "Kisaki",
+    "dialogue": "[Still, from now on, every day will be filled with ups and downs]"
+  },
+  "3164196fbdbcd4127426d172df9dc6e5eb10efd518c42949d863223386ddcf86": {
+    "dialogue": "She pointed her finger and raised the corner of her mouth."
+  },
+  "19e3fbc81b1ff4ef177cdbdb246e23cfd59d11fb7434fe04470dddb711970b88": {
+    "char": "Kisaki",
+    "dialogue": "\"I'll spoil Ruri a lot from now on. I'll tease him a lot too.\""
+  },
+  "ea722c2ae53ba10920a8bcbef58775ae219e0f1fadbfa85e0e24bc2a9b7de20c": {
+    "char": "Ruri",
+    "dialogue": "\"Nothing much has changed, it seems.\""
+  },
+  "130ff6e8933eba61f2f2382f78896a45390672d425787fa8749b2985b89694ce": {
+    "dialogue": "Treating me not as an older brother, Kisaki handles me"
+  },
+  "003bf909fb13b76123accd09d32c6d890a13ad374160351814908557fbc14cb8": {
+    "dialogue": "Treating me not as an older brother, Kisaki handles me. It's how she's always been."
+  },
+  "0a82cc811032b8632c534254165518f187a401950bd0d6e2e7970c7bf18e200c": {
+    "char": "Kisaki",
+    "dialogue": "\"Because, I hate Ruri's face.\""
+  },
+  "e3e76fdb1fbb168c7327dcb270d628e17c6dd696d919639ca085a3ffd4207584": {
+    "dialogue": "Smirking coldly with an upward glance."
+  },
+  "669d8a4c9ff358e94955857992271e00d5cec1e49d26c44f8c727ff0bb3f7b56": {
+    "char": "Ruri",
+    "dialogue": "[Don't say it so happily]"
+  },
+  "cfff9d8d12ec757befc090aad1a0e68448f15aed6a675c80b395c285880ec45e": {
+    "dialogue": "My words lacked persuasiveness."
+  },
+  "c8832398542f537005bb484e2a0834174a879c3b615188affefb3e2e2c892814": {
+    "char": "Kisaki",
+    "dialogue": "[Despite having masochistic tendencies]"
+  },
+  "735e2d6af25047335bff2cc18d6118b3973ebb5d131f189130d5358f4ae655c4": {
+    "char": "Ruri",
+    "dialogue": "\"Listen up now"
+  },
+  "640a481dcafa90debcc8b6f5a4b4556db5d45c5b10f3d93e7e42b0f4dc98dc5e": {
+    "dialogue": "Snapping at the unfair remark."
+  },
+  "eb51bc24b9a5df59f0083a5cedf1672d4a188d4677f8ae03d741fa1f169825e5": {
+    "char": "Kisaki",
+    "dialogue": "[And I have a sadistic streak]"
+  },
+  "c7106de3d2011f3e1f7c2153dac784405b4d85321c3a56e0cd90e3c29c0ab861": {
+    "dialogue": "Putting a hand to her lips, she spoke seductively."
+  },
+  "51aa3aadabdb13488b20794fd333c931752b931ab2d6e365812e3127999f5ba6": {
+    "char": "Kisaki",
+    "dialogue": "\"I really want to dislike you more, Ruri. I want to actively dislike you. How should I go about 'ringing' you?\""
+  },
+  "e3dff7c2f4f084e86e74cab5bb1035a824190475f143537a5d6cfe6358b725c8": {
+    "char": "Ruri",
+    "dialogue": "\"I'm lucky to have such an amazing sister, I guess.\""
+  },
+  "9f5d583e9e2d5e4b418a9be401624c27165f86c4565171d4d726124811df8dda": {
+    "dialogue": "Pouring all his displeasure into it, he sends a sarcastic remark"
+  },
+  "6c31593cdb6ec0fc8c9c0e45aa8781948808f0a1cb64db5e17dd2abc843a4140": {
+    "char": "Kisaki",
+    "dialogue": "[Oh, how unfortunate]"
+  },
+  "ebd4df4c68a66c6a723edd9d2383d3482cc11c4d1c20489ac45d69f10ad2adcd": {
+    "dialogue": "Bored, Kisaki says"
+  },
+  "d68ef9e725b7a5e2ce9485a16814509f6d884b77c98b24c00519b6b02d30acab": {
+    "char": "Kisaki",
+    "dialogue": "I don't want to see a happy Ruri. Please, become even more miserable."
+  },
+  "03cee3dd673ff4b71c65eabba89b4caf7c66731c17866917ba7a55dbf3eeb25c": {
+    "dialogue": "No."
+  },
+  "c25230d682b768aba1f9de68190816095cc4262de421b67c83bd0b8424e7cf04": {
+    "dialogue": "No, he says, shaking his head and emphasizing in a clear voice."
+  },
+  "24b436e446c68659b11ffdaa596f7ef2c85edd6c7ac9a8d39a15b3daea272d95": {
+    "char": "Kisaki",
+    "dialogue": "[Leave it to me, I'll take responsibility for making you unhappy. Relax and sink into the whirlpool of misfortune.]"
+  },
+  "cc0604feeeecce3570ee5e5726e68a5653bf592213712906ed4cfb87f1a69259": {
+    "char": "Ruri",
+    "dialogue": "[Mind your own business]"
+  },
+  "c68b97ed119e9839f6dd5131f2e3f2228150a3f55bfbf7cbdcebaf930c0ff72a": {
+    "dialogue": "The truth, truly."
+  },
+  "2e33a9ccf5a7a33657e8fd718637e695fe9f2c30aebb2b952feffcfd30ebbadf": {
+    "char": "Ruri",
+    "dialogue": "I....... It's not that I can't speak, it's just that if I do, people will find out what a rotten person I am."
+  },
+  "f6a8bb7aaebcfb98ee0b30ebda59d008257a8f9d6a8e3745d50dcd8231041ca5": {
+    "dialogue": "Excellent grades, beautiful appearance, and exceptional talent"
+  },
+  "fc52ea140b5970ba547ce42a38a1913dd7222c7b2596dfe2a66db773892b97c3": {
+    "dialogue": "Excellent grades, beautiful appearance, and exceptional talent, she is the pride of her class, blooming radiantly."
+  },
+  "5c0c57c30d2686a7ff03f0b92b772a42fc8c0bab4c838c67a6adbe781881a4fc": {
+    "dialogue": "Of course, that's only when I'm not around."
+  },
+  "f7a2a088c8767a6c61cad2ddc68b8ed2bbb91d731fc79859eb3bd60bead1804a": {
+    "char": "Kisaki",
+    "dialogue": "\"Oh, that's none of your business.\""
+  },
+  "ea8e49b9d3c02a0750a62e56954742e5f480bede972ce5ddfeab90fcbb7691fa": {
+    "dialogue": "Taking a step forward"
+  },
+  "101af97ab7582c990922e9e77408650f34458c19760edac6a05fc09e5fd929db": {
+    "char": "Kisaki",
+    "dialogue": "\"I'm good at acting. And being a sweet little sister just in front of family... that's the most unappealing thing, isn't it?!\""
+  },
+  "2da1af6718cf90d0894183e23b53d8dc128ef4ebf5331bf628e040a1850b363d": {
+    "char": "Ruri",
+    "dialogue": "It'd be nice if you could act a little in front of me too."
+  },
+  "d66fd3f5cc323e0d4de9ce3c0d5dce1c6075189bf9e2bd4dff97425f92be869d": {
+    "dialogue": "Crossing her arms, she retorts"
+  },
+  "69a29d91ded325a844042989d680279297e1723e140304c617c7ec3cae31d044": {
+    "dialogue": "Crossing her arms, she retorts. I wish I could be deceived by the unattainable flower."
+  },
+  "e67d3694dac7f5e059007ffa9fffe77c49032bc5a3ec8590338b33549572c3e7": {
+    "char": "Ruri",
+    "dialogue": "I...... Wait. In front of our parents, you're way beyond just being honest."
+  },
+  "39774d88ec5872b0a2f0e435bf59ea424baec4a1ef39cb103eb27222388a7ed6": {
+    "char": "Kisaki",
+    "dialogue": "[What are you saying now]"
+  },
+  "bea0c56f8001e3a567a10be951b7ac5f55a540cc82f816cbe2d7468adee479c4": {
+    "dialogue": "Just by mentioning the word \"parents.\""
+  },
+  "dd45037726eae229b177b1dcfe726157b365ed2fca774b9fb5a54e54fd798a23": {
+    "dialogue": "Just by mentioning the word \"parents.\" Does her expression always change so unpleasantly?"
+  },
+  "36054894a4c9194f05825dc6a0fe87840b34c8645741722080fc315746e730b6": {
+    "char": "Kisaki",
+    "dialogue": "[Stop saying foolish things. Those people aren't family - they're just strangers connected by blood. The only family I have is Ruri.]"
+  },
+  "d3c2a3a0f754c8c3065bbaf1b2f8c5dc6cf4ae0798fd14f9d7f8f565519413d2": {
+    "dialogue": "Tsukiyashiro Kisaki hated her parents from the bottom of her heart"
+  },
+  "c64984ef0dbb3e3d77846ec271fa4c019433a7bbc39ab146f8e0945072f5f8be": {
+    "dialogue": "Tsukiyashiro Kisaki didn't just dislike her parents, she loathed them."
+  },
+  "d1e04785dd7d1d94c9448ee0f4426c6279ece07c51d8b532ebc83acb3a0acf20": {
+    "char": "Kisaki",
+    "dialogue": "\"It doesn't matter to me, that bunch. The issue is whether you hate them or not.\""
+  },
+  "2a554b140b39c0f9494a91e8a27ab9ae55367b08c334a62f160b447cd6085de6": {
+    "dialogue": "Not acknowledged as an existence."
+  },
+  "0f7cf7cd81f04cd5ae40c1613da68bab62814ad3494df24984600c6d6b46ba20": {
+    "dialogue": "Not acknowledging their existence. In the past, Kisaki had evaluated them this way."
+  },
+  "7c484379ad8bef3a4a46589454ae8d6bde08e12fc1e9afe03557aa1cc454dc03": {
+    "char": "Kisaki",
+    "dialogue": "Besides, they too must be relieved that a burden like me is gone."
+  },
+  "d55daa93a992f2beed4c2419c9c9f88cd90ee91a16426c657445b0da82f6275e": {
+    "char": "Ruri",
+    "dialogue": "F... Yeah]"
+  },
+  "166ff3399a3c73fc1ab61d75e295c07facfbc40f6c0d5ce06953bfcc0c897c7e": {
+    "dialogue": "I couldn't say anything."
+  },
+  "214dc84a1bdf79b13e11eaf454081b97a506bdbe5efc27c41a42b48e7b995a39": {
+    "dialogue": "I couldn't say anything. I had no right to retort."
+  },
+  "c65ac6ddabda750defd196df251e7ad385e81ebfca377c1366a10cd61096b829": {
+    "dialogue": "Kisaki's \"hate\" is very complex and has many meanings"
+  },
+  "29b3aab081996ec74a9cd9fe1586df4891c2e4bfbfa6f453ef0290f21796a214": {
+    "dialogue": "A lodging for attending the school on the island."
+  },
+  "7577a62917fda13cd2405aae79bc9058e57d79ffb988eb8d7c919b5b57909d74": {
+    "dialogue": "To live freely, without worry of parents, Kisaki had been staying at the Yuugyouji household for some time now, that was the situation until recently."
+  },
+  "c5f7b1613a5675ab4068d34f435bf569b6d86de75c3cb9b392a0943237b87752": {
+    "char": "Kisaki",
+    "dialogue": "That mansion is a wonderful library."
+  },
+  "6a9179a5f51dc6242ac1277ba7ca02f7d1f799d9bd52fd0f1f7eade5f318be50": {
+    "dialogue": "And a new academic year."
+  },
+  "1d3bb92eeee5c47f3508e796cf3b3c02c416c5c400c5e6b3c848de118b298880": {
+    "dialogue": "And a new academic year. I was to attend the school on the island, Hatsuhana Academy, and live with the Yuugyouji family, just like Kisaki did."
+  },
+  "867e8340e274af4db297757645927ae243618e5b4051b6f0bc65de790ff5399b": {
+    "dialogue": "By the way, Kisaki, who is one year younger, attends Takayama Academy."
+  },
+  "326a4b0478c5a56baeb89ff0b26d524001562dcb27ec9ba076de736e165f1502": {
+    "dialogue": "Incidentally, Kisaki, who is one year younger, attends Takayama Academy. If things go as planned, she will graduate from Takayama Academy next year and enroll in Hatsuhana Academy."
+  },
+  "ce328deeb37982c5f5f68a18f4d4accc512ea1e3bb15a78f8c6ff0d02536e56a": {
+    "char": "Ruri",
+    "dialogue": "It feels like I spent every day of my childhood in that library."
+  },
+  "8262a510fd1e3e4e5f1aa26c31aa6d60071c41239b2a0b15c67df0fe09ce6a0f": {
+    "dialogue": "Our shared hobby as siblings"
+  },
+  "322c6c3a14e1577798d26a2e4a49424ae93eedaea7c4efc7d046c002db0c9c07": {
+    "char": "Ruri",
+    "dialogue": "\"I wonder if Yoruko is still a bookworm?\""
   }
 }

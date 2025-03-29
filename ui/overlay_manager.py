@@ -22,7 +22,7 @@ class OverlayManager:
                 overlay = FloatingOverlayWindow(self.master, roi_name, config, manager_ref=self)
                 self.overlays[roi_name] = overlay
             except Exception as e:
-                print(f"Error creating floating overlay for {roi_name}: {e}")
+                print(f"Error creating floating overlay window for {roi_name}: {e}")
 
     def update_overlay(self, roi_name, text):
         if roi_name in self.overlays:
@@ -74,7 +74,8 @@ class OverlayManager:
             del self.overlays[roi_name]
 
     def destroy_all_overlays(self):
-        for name in list(self.overlays.keys()):
+        names = list(self.overlays.keys())
+        for name in names:
             self.destroy_overlay(name)
         self.overlays = {}
 

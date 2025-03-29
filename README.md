@@ -6,8 +6,7 @@ Visual Novel Translator is a desktop application designed to assist users in rea
 
 It offers flexibility through multiple OCR engines, various translation service presets, per-game configurations, and features like color filtering for improved text extraction and a quick "Snip & Translate" tool.
 
-<!-- Add Screenshots/GIFs Here -->
-*(Consider adding screenshots showing the main UI, ROI definition, overlays, snip tool, etc.)*
+<!-- Add Screenshots/GIFs Here showing the main UI, ROI definition, overlays, snip tool, etc.-->
 
 ## Core Features
 

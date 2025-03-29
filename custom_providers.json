@@ -1,8 +1,0 @@
-{
-  "Custom": {
-    "api_url": "https://openrouter.ai/api/v1",
-    "system_prompt": "You are a professional translator. Translate the following text accurately and return the output in this format:\n<|1|> translated text for segment 1\n<|2|> translated text for segment 2\nOnly include the tagged lines.",
-    "model": "deepseek/deepseek-chat-v3-0324",
-    "temperature": 0.6
-  }
-}

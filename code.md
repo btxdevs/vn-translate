@@ -1,629 +1,1216 @@
-Okay, here are the full scripts for the files that need changes to implement OCR engine switching between PaddleOCR, EasyOCR, and Windows OCR.
+Okay, I will refactor the code to pass the `stable_texts` dictionary directly to the translation function, ensuring each ROI's text is treated as a distinct segment. This involves modifying `ui/translation_tab.py` and `utils/translation.py`. `app.py` doesn't require changes for *this specific* request, but I'll include it as requested.
 
-**Important Notes:**
-
-1.  **Dependencies:** You will need to install `easyocr` and potentially `pywinrt` for Windows OCR.
-    *   `pip install easyocr`
-    *   `pip install pywinrt` (May require specific build tools/SDKs depending on your Windows setup).
-2.  **Windows OCR:** Windows OCR availability depends on the language packs installed on your Windows system. Not all languages supported by Paddle/EasyOCR are available in Windows OCR. The code includes checks, but functionality depends on the OS configuration.
-3.  **Models:** EasyOCR and PaddleOCR will download models on first use for a specific language. This can take time and requires an internet connection initially.
-4.  **Error Handling:** Basic error handling is included, but real-world usage might reveal more edge cases.
-5.  **Performance:** Different engines have varying performance characteristics (speed, accuracy, resource usage).
-
---- START OF FILE utils/settings.py ---
-
+--- START OF FILE translation_tab.py ---
 ```python
-import json
-import os
+# --- START OF FILE ui/translation_tab.py ---
 
-SETTINGS_FILE = "vn_translator_settings.json"
-
-DEFAULT_SETTINGS = {
-    "last_preset_name": None,
-    "target_language": "en",
-    "stable_threshold": 3,
-    "max_display_width": 800,
-    "max_display_height": 600,
-    "auto_translate": False,
-    "ocr_language": "jpn",
-    "ocr_engine": "paddle", # Added: default engine
-    "global_overlays_enabled": True,
-    "overlay_settings": {},
-    "floating_controls_pos": None,
-    "game_specific_context": {}
-}
-
-DEFAULT_SINGLE_OVERLAY_CONFIG = {
-    "enabled": True,
-    "font_family": "Segoe UI",
-    "font_size": 14,
-    "font_color": "white",
-    "bg_color": "#222222",
-    "alpha": 1.0,
-    "wraplength": 450,
-    "justify": "left",
-    "geometry": None
-}
-
-def load_settings():
-    settings = DEFAULT_SETTINGS.copy()
-    if os.path.exists(SETTINGS_FILE):
-        try:
-            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                loaded_settings = json.load(f)
-            # Ensure all default keys are present, using defaults if missing
-            for key, default_value in DEFAULT_SETTINGS.items():
-                settings[key] = loaded_settings.get(key, default_value)
-        except Exception as e:
-            print(f"Error loading settings: {e}. Using defaults.")
-    return settings
-
-def save_settings(settings):
-    try:
-        # Ensure only valid keys are saved (optional, but good practice)
-        valid_settings = {k: settings.get(k, DEFAULT_SETTINGS.get(k)) for k in DEFAULT_SETTINGS}
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(valid_settings, f, indent=2)
-        return True
-    except Exception as e:
-        print(f"Error saving settings: {e}")
-        return False
-
-def get_setting(key, default=None):
-    settings = load_settings()
-    # Use the default from DEFAULT_SETTINGS if key exists there, otherwise use the provided default
-    fallback_default = DEFAULT_SETTINGS.get(key, default)
-    return settings.get(key, fallback_default)
-
-def set_setting(key, value):
-    settings = load_settings()
-    settings[key] = value
-    return save_settings(settings)
-
-def update_settings(new_values):
-    settings = load_settings()
-    settings.update(new_values)
-    return save_settings(settings)
-
-def get_overlay_config_for_roi(roi_name):
-    config = DEFAULT_SINGLE_OVERLAY_CONFIG.copy()
-    all_overlay_settings = get_setting("overlay_settings", {})
-    roi_specific_saved = all_overlay_settings.get(roi_name, {})
-    config.update(roi_specific_saved)
-    # Ensure required keys have default values if somehow missing after update
-    for key, default_value in DEFAULT_SINGLE_OVERLAY_CONFIG.items():
-        if key not in config:
-            config[key] = default_value
-    return config
-
-def save_overlay_config_for_roi(roi_name, new_partial_config):
-    all_overlay_settings = get_setting("overlay_settings", {})
-    if roi_name not in all_overlay_settings:
-        all_overlay_settings[roi_name] = {}
-
-    # Update existing config with new values, preserving geometry handling
-    current_config = all_overlay_settings.get(roi_name, {})
-    current_config.update(new_partial_config)
-    all_overlay_settings[roi_name] = current_config
-
-    # Special handling for geometry reset (setting it to None)
-    if 'geometry' in new_partial_config and new_partial_config['geometry'] is None:
-         all_overlay_settings[roi_name]['geometry'] = None
-
-    return update_settings({"overlay_settings": all_overlay_settings})
-
-```
-
---- END OF FILE utils/settings.py ---
-
---- START OF FILE utils/ocr.py ---
-
-```python
-import time
-import threading
-import numpy as np
-
-# --- Engine Specific Imports ---
-try:
-    from paddleocr import PaddleOCR
-    _paddle_available = True
-except ImportError:
-    _paddle_available = False
-    print("PaddleOCR not found. Install with 'pip install paddlepaddle paddleocr'")
-
-try:
-    import easyocr
-    _easyocr_available = True
-except ImportError:
-    _easyocr_available = False
-    print("EasyOCR not found. Install with 'pip install easyocr'")
-
-try:
-    # pywinrt is required for Windows OCR
-    import asyncio
-    import winrt.windows.media.ocr as win_ocr
-    import winrt.windows.graphics.imaging as win_imaging
-    import winrt.windows.storage.streams as win_streams
-    _windows_ocr_available = True
-except ImportError:
-    _windows_ocr_available = False
-    print("Windows OCR components (pywinrt) not found or failed to import. Install with 'pip install pywinrt'")
-
-# --- Globals for Engine Instances (Lazy Initialization) ---
-_paddle_ocr_instance = None
-_paddle_lang_loaded = None
-_easyocr_instance = None
-_easyocr_lang_loaded = None
-_windows_ocr_engines = {} # Cache engines per language
-_init_lock = threading.Lock() # Lock for initializing engines
-
-# --- Language Mappings ---
-# Map internal codes ('jpn', 'eng', etc.) to engine-specific codes
-PADDLE_LANG_MAP = {
-    "jpn": "japan", "jpn_vert": "japan", "eng": "en",
-    "chi_sim": "ch", "chi_tra": "ch", "kor": "ko",
-    # Add more mappings as needed
-}
-EASYOCR_LANG_MAP = {
-    "jpn": "ja", "jpn_vert": "ja", "eng": "en",
-    "chi_sim": "ch_sim", "chi_tra": "ch_tra", "kor": "ko",
-    # Add more mappings as needed
-}
-WINDOWS_OCR_LANG_MAP = {
-    "jpn": "ja", "jpn_vert": "ja", "eng": "en-US", # Often needs region specific
-    "chi_sim": "zh-Hans", "chi_tra": "zh-Hant", "kor": "ko",
-    # Add more mappings as needed - check installed Windows languages
-}
-
-# --- Engine Initialization Functions ---
-
-def _init_paddle(lang_code):
-    global _paddle_ocr_instance, _paddle_lang_loaded
-    if not _paddle_available:
-        raise RuntimeError("PaddleOCR library is not installed.")
-
-    target_lang = PADDLE_LANG_MAP.get(lang_code, "en") # Default to English if map missing
-    if _paddle_ocr_instance and _paddle_lang_loaded == target_lang:
-        return _paddle_ocr_instance
-
-    print(f"[OCR Init] Initializing PaddleOCR for language: {target_lang} (requested: {lang_code})")
-    start_time = time.time()
-    try:
-        # use_angle_cls=True helps with rotated text but might be slower
-        # show_log=False prevents excessive console output
-        instance = PaddleOCR(use_angle_cls=True, lang=target_lang, show_log=False)
-        _paddle_ocr_instance = instance
-        _paddle_lang_loaded = target_lang
-        print(f"[OCR Init] PaddleOCR initialized in {time.time() - start_time:.2f}s")
-        return instance
-    except Exception as e:
-        print(f"[OCR Init] !!! Error initializing PaddleOCR: {e}")
-        _paddle_ocr_instance = None
-        _paddle_lang_loaded = None
-        raise RuntimeError(f"Failed to initialize PaddleOCR: {e}")
-
-def _init_easyocr(lang_code):
-    global _easyocr_instance, _easyocr_lang_loaded
-    if not _easyocr_available:
-        raise RuntimeError("EasyOCR library is not installed.")
-
-    target_lang = EASYOCR_LANG_MAP.get(lang_code)
-    if not target_lang:
-        raise ValueError(f"Language code '{lang_code}' not supported by EasyOCR mapping.")
-
-    # EasyOCR uses a list of languages
-    target_lang_list = [target_lang]
-    if _easyocr_instance and _easyocr_lang_loaded == target_lang_list:
-        return _easyocr_instance
-
-    print(f"[OCR Init] Initializing EasyOCR for language: {target_lang_list} (requested: {lang_code})")
-    start_time = time.time()
-    try:
-        # gpu=True can significantly speed up if CUDA is available and configured
-        instance = easyocr.Reader(target_lang_list, gpu=True)
-        _easyocr_instance = instance
-        _easyocr_lang_loaded = target_lang_list
-        print(f"[OCR Init] EasyOCR initialized in {time.time() - start_time:.2f}s")
-        return instance
-    except Exception as e:
-        print(f"[OCR Init] !!! Error initializing EasyOCR: {e}")
-        _easyocr_instance = None
-        _easyocr_lang_loaded = None
-        raise RuntimeError(f"Failed to initialize EasyOCR: {e}")
-
-def _is_windows_ocr_lang_available(lang_code):
-    if not _windows_ocr_available:
-        return False
-    try:
-        win_lang = win_ocr.OcrLanguage(lang_code)
-        return win_ocr.OcrEngine.is_language_supported(win_lang)
-    except Exception as e:
-        # This can happen if the language code format is wrong or language not installed at all
-        print(f"[OCR Check] Windows OCR language check failed for '{lang_code}': {e}")
-        return False
-
-def _init_windows_ocr(lang_code):
-    global _windows_ocr_engines
-    if not _windows_ocr_available:
-        raise RuntimeError("Windows OCR components (pywinrt) are not available.")
-
-    target_lang = WINDOWS_OCR_LANG_MAP.get(lang_code)
-    if not target_lang:
-        raise ValueError(f"Language code '{lang_code}' not supported by Windows OCR mapping.")
-
-    if target_lang in _windows_ocr_engines:
-        return _windows_ocr_engines[target_lang]
-
-    print(f"[OCR Init] Initializing Windows OCR for language: {target_lang} (requested: {lang_code})")
-    start_time = time.time()
-    try:
-        win_lang = win_ocr.OcrLanguage(target_lang)
-        if not win_ocr.OcrEngine.is_language_supported(win_lang):
-            raise RuntimeError(f"Windows OCR language '{target_lang}' is not installed or supported on this system.")
-
-        engine = win_ocr.OcrEngine.try_create_from_language(win_lang)
-        if engine is None:
-             raise RuntimeError(f"Failed to create Windows OCR engine for language '{target_lang}'.")
-
-        _windows_ocr_engines[target_lang] = engine
-        print(f"[OCR Init] Windows OCR initialized in {time.time() - start_time:.2f}s")
-        return engine
-    except Exception as e:
-        print(f"[OCR Init] !!! Error initializing Windows OCR: {e}")
-        if target_lang in _windows_ocr_engines:
-            del _windows_ocr_engines[target_lang] # Clean up cache on error
-        raise RuntimeError(f"Failed to initialize Windows OCR: {e}")
-
-# --- Windows OCR Async Helper ---
-async def _run_windows_ocr_async(engine, img_bgr):
-    """Helper to run Windows OCR asynchronously."""
-    try:
-        height, width = img_bgr.shape[:2]
-        # Ensure image is BGRA for SoftwareBitmap
-        if img_bgr.shape[2] == 3:
-            img_bgra = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2BGRA)
-        else: # Assuming BGRA already if 4 channels
-            img_bgra = img_bgr
-
-        # Create SoftwareBitmap from numpy array
-        array = np.frombuffer(img_bgra.tobytes(), dtype=np.uint8)
-        stream = win_streams.InMemoryRandomAccessStream()
-        bitmap_encoder = await win_imaging.BitmapEncoder.create_async(win_imaging.BitmapEncoder.png_encoder_id, stream)
-        bitmap_encoder.set_pixel_data(
-            win_imaging.BitmapPixelFormat.BGRA8,
-            win_imaging.BitmapAlphaMode.PREMULTIPLIED, # Or IGNORE if alpha not needed
-            width, height, 96.0, 96.0, array) # Assuming 96 DPI
-        await bitmap_encoder.flush_async()
-
-        bitmap_decoder = await win_imaging.BitmapDecoder.create_async(stream)
-        software_bitmap = await bitmap_decoder.get_software_bitmap_async()
-
-        # Perform OCR
-        ocr_result = await engine.recognize_async(software_bitmap)
-        return ocr_result.text
-    except Exception as e:
-        print(f"[OCR Error] Windows OCR async processing failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return "[Windows OCR Error]"
-
-# --- Main Extraction Function ---
-
-def extract_text(img, lang="jpn", engine_type="paddle"):
-    """
-    Extracts text from an image using the specified engine and language.
-
-    Args:
-        img (numpy.ndarray): The image (BGR format expected).
-        lang (str): The language code (e.g., 'jpn', 'eng').
-        engine_type (str): The OCR engine to use ('paddle', 'easyocr', 'windows').
-
-    Returns:
-        str: The extracted text, or an error message.
-    """
-    if img is None or img.size == 0:
-        return ""
-
-    start_time = time.time()
-    extracted_text = ""
-    engine_instance = None
-
-    try:
-        with _init_lock: # Ensure only one thread initializes an engine at a time
-            if engine_type == "paddle":
-                engine_instance = _init_paddle(lang)
-            elif engine_type == "easyocr":
-                engine_instance = _init_easyocr(lang)
-            elif engine_type == "windows":
-                engine_instance = _init_windows_ocr(lang)
-            else:
-                raise ValueError(f"Unsupported OCR engine type: {engine_type}")
-
-        # --- Perform OCR using the initialized engine ---
-        if engine_type == "paddle":
-            # PaddleOCR expects BGR
-            ocr_result_raw = engine_instance.ocr(img, cls=True)
-            lines = []
-            if ocr_result_raw and isinstance(ocr_result_raw, list) and len(ocr_result_raw) > 0:
-                # Handle potential nesting difference in PaddleOCR versions
-                current_result_set = ocr_result_raw[0] if isinstance(ocr_result_raw[0], list) else ocr_result_raw
-                if current_result_set:
-                    for item in current_result_set:
-                        # Standard format: [[box], [text, score]]
-                        text_info = None
-                        if isinstance(item, list) and len(item) >= 2 and isinstance(item[1], (list, tuple)):
-                            text_info = item[1]
-                        # Older format might be: [box, text, score] - less common now
-                        elif isinstance(item, tuple) and len(item) >= 2:
-                             text_info = item # Assume text is item[1] if tuple
-                        # Extract text if valid structure found
-                        if isinstance(text_info, (tuple, list)) and len(text_info) >= 1 and text_info[0]:
-                            lines.append(str(text_info[0]))
-            extracted_text = " ".join(lines).strip()
-
-        elif engine_type == "easyocr":
-            # EasyOCR expects BGR
-            ocr_result_raw = engine_instance.readtext(img)
-            lines = [item[1] for item in ocr_result_raw if item and len(item) >= 2]
-            extracted_text = " ".join(lines).strip()
-
-        elif engine_type == "windows":
-            # Windows OCR needs async execution
-            extracted_text = asyncio.run(_run_windows_ocr_async(engine_instance, img))
-            extracted_text = extracted_text.strip() # Comes back as single block
-
-        elapsed = time.time() - start_time
-        # print(f"[OCR] Extracted ({engine_type}/{lang}) in {elapsed:.3f}s: '{extracted_text[:50]}...'")
-        return extracted_text
-
-    except RuntimeError as e: # Catch initialization errors
-        print(f"[OCR Error] Engine initialization failed: {e}")
-        return f"[{engine_type.upper()} Init Error]"
-    except ValueError as e: # Catch language mapping errors
-        print(f"[OCR Error] Language configuration error: {e}")
-        return f"[{engine_type.upper()} Lang Error]"
-    except Exception as e:
-        print(f"[OCR Error] Failed during {engine_type} OCR: {e}")
-        import traceback
-        traceback.print_exc()
-        return f"[{engine_type.upper()} Runtime Error]"
-
-```
-
---- END OF FILE utils/ocr.py ---
-
---- START OF FILE ui/capture_tab.py ---
-
-```python
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox, simpledialog
+import threading
+import copy
 from ui.base import BaseTab
-from utils.capture import get_windows, get_window_title
-from utils.settings import get_setting, set_setting
-from utils.ocr import _windows_ocr_available # Import check function
+from utils.translation import translate_text, clear_all_cache, clear_current_game_cache, reset_context # Updated imports
+from utils.config import save_translation_presets, load_translation_presets, _get_game_hash # Import _get_game_hash
+from utils.settings import get_setting, set_setting, update_settings # Import settings functions
 
-class CaptureTab(BaseTab):
-    OCR_LANGUAGES = ["jpn", "jpn_vert", "eng", "chi_sim", "chi_tra", "kor"]
-    # Define available engines
-    OCR_ENGINES = ["paddle", "easyocr"]
-    if _windows_ocr_available: # Conditionally add Windows OCR
-        OCR_ENGINES.append("windows")
+# Default presets configuration (REMOVING system_prompt from UI defaults)
+# NOTE: Existing saved presets might still contain 'system_prompt',
+# but it won't be used by the UI or passed explicitly to translate_text anymore.
+DEFAULT_PRESETS = {
+    "OpenAI (GPT-3.5)": {
+        "api_url": "https://api.openai.com/v1/chat/completions",
+        "api_key": "",
+        "model": "gpt-3.5-turbo",
+        # "system_prompt": "...", # REMOVED FROM HERE
+        "temperature": 0.3,
+        "top_p": 1.0,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+        "max_tokens": 1000,
+        "context_limit": 10
+    },
+    "OpenAI (GPT-4)": {
+        "api_url": "https://api.openai.com/v1/chat/completions",
+        "api_key": "",
+        "model": "gpt-4",
+        # "system_prompt": "...", # REMOVED FROM HERE
+        "temperature": 0.3,
+        "top_p": 1.0,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+        "max_tokens": 1000,
+        "context_limit": 10
+    },
+    "Claude": {
+        "api_url": "https://api.anthropic.com/v1/messages",
+        "api_key": "",
+        "model": "claude-3-haiku-20240307",
+        # "system_prompt": "...", # REMOVED FROM HERE
+        "temperature": 0.3,
+        "top_p": 1.0,
+        "max_tokens": 1000,
+        "context_limit": 10
+    },
+    "Mistral": {
+        "api_url": "https://api.mistral.ai/v1/chat/completions",
+        "api_key": "",
+        "model": "mistral-medium-latest",
+        # "system_prompt": "...", # REMOVED FROM HERE
+        "temperature": 0.3,
+        "top_p": 0.95,
+        "max_tokens": 1000,
+        "context_limit": 10
+    }
+    ,"Local Model (LM Studio/Ollama)": {
+        "api_url": "http://localhost:1234/v1/chat/completions",
+        "api_key": "not-needed",
+        "model": "loaded-model-name",
+        # "system_prompt": "...", # REMOVED FROM HERE
+        "temperature": 0.5,
+        "top_p": 1.0,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+        "max_tokens": 1500,
+        "context_limit": 5
+    }
+}
+
+class TranslationTab(BaseTab):
+    """Tab for translation settings and results with improved preset management."""
 
     def setup_ui(self):
-        capture_frame = ttk.LabelFrame(self.frame, text="Capture Settings", padding="10")
-        capture_frame.pack(fill=tk.X, pady=10)
+        # --- Load relevant settings ---
+        self.target_language = get_setting("target_language", "en")
+        self.auto_translate_enabled = get_setting("auto_translate", False)
+        last_preset_name = get_setting("last_preset_name")
 
-        # --- Window Selection ---
-        win_frame = ttk.Frame(capture_frame)
-        win_frame.pack(fill=tk.X)
-        ttk.Label(win_frame, text="Visual Novel Window:").pack(anchor=tk.W)
-        self.window_var = tk.StringVar()
-        self.window_combo = ttk.Combobox(win_frame, textvariable=self.window_var, width=50, state="readonly")
-        self.window_combo.pack(fill=tk.X, pady=(5, 0))
-        self.window_combo.bind("<<ComboboxSelected>>", self.on_window_selected)
+        # --- Translation settings frame ---
+        self.settings_frame = ttk.LabelFrame(self.frame, text="Translation Settings", padding="10")
+        self.settings_frame.pack(fill=tk.X, pady=10)
 
-        # --- Capture Buttons ---
-        btn_frame = ttk.Frame(capture_frame)
-        btn_frame.pack(fill=tk.X, pady=(5, 10))
-        self.refresh_btn = ttk.Button(btn_frame, text="Refresh List",
-                                      command=self.refresh_window_list)
-        self.refresh_btn.pack(side=tk.LEFT, padx=(0, 5))
-        self.start_btn = ttk.Button(btn_frame, text="Start Capture",
-                                    command=self.app.start_capture)
-        self.start_btn.pack(side=tk.LEFT, padx=5)
-        self.stop_btn = ttk.Button(btn_frame, text="Stop Capture",
-                                   command=self.app.stop_capture, state=tk.DISABLED)
-        self.stop_btn.pack(side=tk.LEFT, padx=5)
-        self.snapshot_btn = ttk.Button(btn_frame, text="Take Snapshot",
-                                       command=self.app.take_snapshot, state=tk.DISABLED)
-        self.snapshot_btn.pack(side=tk.LEFT, padx=5)
-        self.live_view_btn = ttk.Button(btn_frame, text="Return to Live",
-                                        command=self.app.return_to_live, state=tk.DISABLED)
-        self.live_view_btn.pack(side=tk.LEFT, padx=5)
+        # --- Preset Management ---
+        preset_frame = ttk.Frame(self.settings_frame)
+        preset_frame.pack(fill=tk.X, pady=5)
 
-        # --- OCR Settings Frame ---
-        ocr_frame = ttk.Frame(capture_frame)
-        ocr_frame.pack(fill=tk.X, pady=(10, 5))
+        ttk.Label(preset_frame, text="Preset:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
 
-        # OCR Engine Selection
-        ttk.Label(ocr_frame, text="OCR Engine:").pack(side=tk.LEFT, anchor=tk.W, padx=(0, 5))
-        self.engine_var = tk.StringVar()
-        self.engine_combo = ttk.Combobox(ocr_frame, textvariable=self.engine_var, width=12,
-                                         values=self.OCR_ENGINES, state="readonly")
-        default_engine = get_setting("ocr_engine", "paddle")
-        if default_engine in self.OCR_ENGINES:
-            self.engine_combo.set(default_engine)
-        elif self.OCR_ENGINES:
-            self.engine_combo.current(0) # Default to first available
-        self.engine_combo.pack(side=tk.LEFT, anchor=tk.W, padx=5)
-        self.engine_combo.bind("<<ComboboxSelected>>", self.on_engine_selected)
+        # Load presets
+        self.translation_presets = load_translation_presets()
+        if not self.translation_presets:
+            self.translation_presets = copy.deepcopy(DEFAULT_PRESETS)
+            # Optionally save the defaults if they were missing
+            # save_translation_presets(self.translation_presets)
 
-        # OCR Language Selection
-        ttk.Label(ocr_frame, text="Language:").pack(side=tk.LEFT, anchor=tk.W, padx=(15, 5)) # Added spacing
-        self.lang_var = tk.StringVar()
-        self.lang_combo = ttk.Combobox(ocr_frame, textvariable=self.lang_var, width=10,
-                                       values=self.OCR_LANGUAGES, state="readonly")
-        default_lang = get_setting("ocr_language", "jpn")
-        if default_lang in self.OCR_LANGUAGES:
-            self.lang_combo.set(default_lang)
-        elif self.OCR_LANGUAGES:
-            self.lang_combo.current(0)
-        self.lang_combo.pack(side=tk.LEFT, anchor=tk.W, padx=5)
-        self.lang_combo.bind("<<ComboboxSelected>>", self.on_language_changed)
+        self.preset_names = sorted(list(self.translation_presets.keys())) # Sort names
+        self.preset_combo = ttk.Combobox(preset_frame, values=self.preset_names, width=30, state="readonly") # Wider
+        preset_index = -1
+        if last_preset_name and last_preset_name in self.preset_names:
+            try:
+                preset_index = self.preset_names.index(last_preset_name)
+            except ValueError:
+                pass # Name not found
+        if preset_index != -1:
+            self.preset_combo.current(preset_index)
+        elif self.preset_names:
+            self.preset_combo.current(0) # Default to first if last not found
 
-        # --- Status Label ---
-        self.status_label = ttk.Label(capture_frame, text="Status: Ready")
-        self.status_label.pack(fill=tk.X, pady=(10, 0), anchor=tk.W)
+        self.preset_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=5)
+        self.preset_combo.bind("<<ComboboxSelected>>", self.on_preset_selected)
 
-        # Initial population
-        self.refresh_window_list()
+        # Preset management buttons
+        btn_frame = ttk.Frame(preset_frame)
+        btn_frame.grid(row=0, column=2, padx=5, pady=5)
 
-    def refresh_window_list(self):
-        self.app.update_status("Refreshing window list...")
-        self.window_combo.config(state=tk.NORMAL)
-        self.window_combo.set("")
+        self.save_preset_btn = ttk.Button(btn_frame, text="Save", command=self.save_preset)
+        self.save_preset_btn.pack(side=tk.LEFT, padx=2)
+
+        self.save_as_preset_btn = ttk.Button(btn_frame, text="Save As...", command=self.save_preset_as)
+        self.save_as_preset_btn.pack(side=tk.LEFT, padx=2)
+
+        self.delete_preset_btn = ttk.Button(btn_frame, text="Delete", command=self.delete_preset)
+        self.delete_preset_btn.pack(side=tk.LEFT, padx=2)
+
+        # Make preset combo column expandable
+        preset_frame.columnconfigure(1, weight=1)
+
+        # --- Notebook for settings ---
+        self.settings_notebook = ttk.Notebook(self.settings_frame)
+        self.settings_notebook.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # === Basic Settings Tab ===
+        self.basic_frame = ttk.Frame(self.settings_notebook, padding=10)
+        self.settings_notebook.add(self.basic_frame, text="General Settings") # Renamed tab
+
+        # Target language (Loads from general settings)
+        ttk.Label(self.basic_frame, text="Target Language:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        self.target_lang_entry = ttk.Entry(self.basic_frame, width=15) # Wider
+        self.target_lang_entry.insert(0, self.target_language)
+        self.target_lang_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=5)
+        self.target_lang_entry.bind("<FocusOut>", self.save_basic_settings) # Save on leaving field
+        self.target_lang_entry.bind("<Return>", self.save_basic_settings)   # Save on pressing Enter
+
+        # Additional context (Now game-specific, loaded dynamically)
+        ttk.Label(self.basic_frame, text="Additional Context (Game Specific):", anchor=tk.NW).grid(row=1, column=0, sticky=tk.NW, padx=5, pady=5)
+        self.additional_context_text = tk.Text(self.basic_frame, width=40, height=5, wrap=tk.WORD)
+        self.additional_context_text.grid(row=1, column=1, sticky=tk.NSEW, padx=5, pady=5) # Expand fully
+        scroll_ctx = ttk.Scrollbar(self.basic_frame, command=self.additional_context_text.yview)
+        scroll_ctx.grid(row=1, column=2, sticky=tk.NS, pady=5)
+        self.additional_context_text.config(yscrollcommand=scroll_ctx.set)
+        # Bind to game-specific save function
+        self.additional_context_text.bind("<FocusOut>", self.save_context_for_current_game)
+        # Use Shift+Return to insert newline, regular Return to save
+        self.additional_context_text.bind("<Return>", self.save_context_for_current_game)
+        self.additional_context_text.bind("<Shift-Return>", lambda e: self.additional_context_text.insert(tk.INSERT, '\n'))
+
+        # Make context column expandable
+        self.basic_frame.columnconfigure(1, weight=1)
+        self.basic_frame.rowconfigure(1, weight=1) # Allow context text to expand vertically
+
+
+        # === Preset Settings Tab ===
+        self.preset_settings_frame = ttk.Frame(self.settings_notebook, padding=10)
+        self.settings_notebook.add(self.preset_settings_frame, text="Preset Details") # Renamed tab
+
+        # Current row index
+        row_num = 0
+
+        # API Key (Part of Preset)
+        ttk.Label(self.preset_settings_frame, text="API Key:").grid(row=row_num, column=0, sticky=tk.W, padx=5, pady=5)
+        self.api_key_entry = ttk.Entry(self.preset_settings_frame, width=40, show="*")
+        self.api_key_entry.grid(row=row_num, column=1, columnspan=2, sticky=tk.EW, padx=5, pady=5)
+        row_num += 1
+
+        # API URL (Part of Preset)
+        ttk.Label(self.preset_settings_frame, text="API URL:").grid(row=row_num, column=0, sticky=tk.W, padx=5, pady=5)
+        self.api_url_entry = ttk.Entry(self.preset_settings_frame, width=40)
+        self.api_url_entry.grid(row=row_num, column=1, columnspan=2, sticky=tk.EW, padx=5, pady=5)
+        row_num += 1
+
+        # Model (Part of Preset)
+        ttk.Label(self.preset_settings_frame, text="Model:").grid(row=row_num, column=0, sticky=tk.W, padx=5, pady=5)
+        self.model_entry = ttk.Entry(self.preset_settings_frame, width=40)
+        self.model_entry.grid(row=row_num, column=1, columnspan=2, sticky=tk.EW, padx=5, pady=5)
+        row_num += 1
+
+        # System prompt REMOVED from UI
+        # ttk.Label(self.preset_settings_frame, text="System Prompt:", anchor=tk.NW).grid(row=row_num, column=0, sticky=tk.NW, padx=5, pady=5)
+        # self.system_prompt_text = tk.Text(self.preset_settings_frame, width=50, height=6, wrap=tk.WORD)
+        # self.system_prompt_text.grid(row=row_num, column=1, sticky=tk.NSEW, padx=5, pady=5)
+        # scroll_sys = ttk.Scrollbar(self.preset_settings_frame, command=self.system_prompt_text.yview)
+        # scroll_sys.grid(row=row_num, column=2, sticky=tk.NS, pady=5)
+        # self.system_prompt_text.config(yscrollcommand=scroll_sys.set)
+        # row_num += 1 # Increment row if prompt was present
+
+        # Context Limit (Part of Preset)
+        ttk.Label(self.preset_settings_frame, text="Context Limit (History):").grid(row=row_num, column=0, sticky=tk.W, padx=5, pady=5)
+        self.context_limit_entry = ttk.Entry(self.preset_settings_frame, width=10)
+        self.context_limit_entry.grid(row=row_num, column=1, sticky=tk.W, padx=5, pady=5)
+        row_num += 1
+
+        # --- Advanced Parameters Frame ---
+        adv_param_frame = ttk.Frame(self.preset_settings_frame)
+        adv_param_frame.grid(row=row_num, column=0, columnspan=3, sticky=tk.EW, pady=(10,0))
+        row_num += 1 # Increment row after placing the frame
+
+        # Temperature (Part of Preset)
+        ttk.Label(adv_param_frame, text="Temp:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+        self.temperature_entry = ttk.Entry(adv_param_frame, width=8)
+        self.temperature_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+
+        # Top P (Part of Preset)
+        ttk.Label(adv_param_frame, text="Top P:").grid(row=0, column=2, sticky=tk.W, padx=5, pady=2)
+        self.top_p_entry = ttk.Entry(adv_param_frame, width=8)
+        self.top_p_entry.grid(row=0, column=3, sticky=tk.W, padx=5, pady=2)
+
+        # Frequency Penalty (Part of Preset)
+        ttk.Label(adv_param_frame, text="Freq Pen:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+        self.frequency_penalty_entry = ttk.Entry(adv_param_frame, width=8)
+        self.frequency_penalty_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+
+        # Presence Penalty (Part of Preset)
+        ttk.Label(adv_param_frame, text="Pres Pen:").grid(row=1, column=2, sticky=tk.W, padx=5, pady=2)
+        self.presence_penalty_entry = ttk.Entry(adv_param_frame, width=8)
+        self.presence_penalty_entry.grid(row=1, column=3, sticky=tk.W, padx=5, pady=2)
+
+        # Max Tokens (Part of Preset)
+        ttk.Label(adv_param_frame, text="Max Tokens:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
+        self.max_tokens_entry = ttk.Entry(adv_param_frame, width=8)
+        self.max_tokens_entry.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+
+        # Make columns expandable in preset settings frame
+        self.preset_settings_frame.columnconfigure(1, weight=1)
+        # self.preset_settings_frame.rowconfigure(3, weight=1) # Row 3 was system prompt, remove if not needed
+
+        # Load initial preset data
+        self.on_preset_selected() # Load data for the initially selected preset
+
+        # === Action Buttons ===
+        action_frame = ttk.Frame(self.settings_frame)
+        action_frame.pack(fill=tk.X, pady=10)
+
+        # --- Cache and Context Buttons ---
+        cache_context_frame = ttk.Frame(action_frame)
+        cache_context_frame.pack(side=tk.LEFT, padx=0)
+
+        self.clear_current_cache_btn = ttk.Button(cache_context_frame, text="Clear Current Game Cache", command=self.clear_current_translation_cache)
+        self.clear_current_cache_btn.pack(side=tk.TOP, padx=5, pady=2, anchor=tk.W)
+
+        self.clear_all_cache_btn = ttk.Button(cache_context_frame, text="Clear All Cache", command=self.clear_all_translation_cache)
+        self.clear_all_cache_btn.pack(side=tk.TOP, padx=5, pady=2, anchor=tk.W)
+
+        self.reset_context_btn = ttk.Button(cache_context_frame, text="Reset Translation Context", command=self.reset_translation_context) # Command updated below
+        self.reset_context_btn.pack(side=tk.TOP, padx=5, pady=(5,2), anchor=tk.W) # Add some top padding
+
+        # --- Translate Buttons (Grouped) ---
+        translate_btn_frame = ttk.Frame(action_frame)
+        translate_btn_frame.pack(side=tk.RIGHT, padx=5, pady=5)
+
+        self.translate_btn = ttk.Button(translate_btn_frame, text="Translate", command=self.perform_translation)
+        self.translate_btn.pack(side=tk.LEFT, padx=(0, 2)) # Normal translate
+
+        self.force_translate_btn = ttk.Button(translate_btn_frame, text="Force Retranslate", command=self.perform_force_translation)
+        self.force_translate_btn.pack(side=tk.LEFT, padx=(2, 0)) # Force retranslate
+
+
+        # === Auto Translation Option (Loads from general settings) ===
+        auto_frame = ttk.Frame(self.settings_frame)
+        auto_frame.pack(fill=tk.X, pady=5)
+
+        self.auto_translate_var = tk.BooleanVar(value=self.auto_translate_enabled)
+        self.auto_translate_check = ttk.Checkbutton(
+            auto_frame,
+            text="Auto-translate when stable text changes",
+            variable=self.auto_translate_var,
+            command=self.toggle_auto_translate # Save setting on change
+        )
+        self.auto_translate_check.pack(side=tk.LEFT, padx=5)
+
+        # === Translation Output ===
+        output_frame = ttk.LabelFrame(self.frame, text="Translated Text (Preview)", padding="10")
+        output_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+
+        self.translation_display = tk.Text(output_frame, wrap=tk.WORD, height=10, width=40) # Reduced height
+        self.translation_display.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        scrollbar = ttk.Scrollbar(output_frame, command=self.translation_display.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.translation_display.config(yscrollcommand=scrollbar.set)
+        self.translation_display.config(state=tk.DISABLED)
+
+    def load_context_for_game(self, context_text):
+        """Loads the game-specific context into the text widget."""
         try:
-            windows = get_windows()
-            filtered_windows = {}
-            app_title = self.app.master.title()
-            for hwnd in windows:
-                title = get_window_title(hwnd)
-                # Basic filtering
-                if title and title != app_title and "Program Manager" not in title and "Default IME" not in title:
-                    filtered_windows[hwnd] = f"{hwnd}: {title}"
+            if not self.additional_context_text.winfo_exists(): return
+            self.additional_context_text.config(state=tk.NORMAL)
+            self.additional_context_text.delete("1.0", tk.END)
+            if context_text: self.additional_context_text.insert("1.0", context_text)
+        except tk.TclError: print("Error updating context text widget (might be destroyed).")
+        except Exception as e: print(f"Unexpected error loading context: {e}")
 
-            window_titles = list(filtered_windows.values())
-            self.window_handles = list(filtered_windows.keys()) # Store HWNDs in the same order
-            self.window_combo['values'] = window_titles
-
-            if window_titles:
-                last_hwnd = self.app.selected_hwnd
-                # Try to re-select the previously selected window if it still exists
-                if last_hwnd and last_hwnd in self.window_handles:
-                    try:
-                        idx = self.window_handles.index(last_hwnd)
-                        self.window_combo.current(idx)
-                    except ValueError:
-                        # Handle case where HWND exists but somehow index fails (shouldn't happen)
-                        self.app.selected_hwnd = None
-                        self.app.load_rois_for_hwnd(None)
-                elif self.app.selected_hwnd: # If previous HWND is no longer valid
-                    self.app.selected_hwnd = None
-                    self.app.load_rois_for_hwnd(None)
-
-                self.app.update_status(f"Found {len(window_titles)} windows. Select one.")
-            else:
-                self.app.update_status("No suitable windows found.")
-                if self.app.selected_hwnd: # Clear selection if no windows found
-                    self.app.selected_hwnd = None
-                    self.app.load_rois_for_hwnd(None)
-
-            self.window_combo.config(state="readonly") # Set back to readonly after update
-
-        except Exception as e:
-            self.app.update_status(f"Error refreshing windows: {e}")
-            self.window_combo.config(state="readonly") # Ensure readonly on error
-
-    def on_window_selected(self, event=None):
+    def save_context_for_current_game(self, event=None):
+        """Save the content of the context text widget for the current game."""
+        if event and event.keysym == 'Return' and not (event.state & 0x0001): pass
+        elif event and event.keysym == 'Return': return "break"
+        current_hwnd = self.app.selected_hwnd
+        if not current_hwnd: return
+        game_hash = _get_game_hash(current_hwnd)
+        if not game_hash: print("Cannot save context: Could not get game hash."); return
         try:
-            selected_index = self.window_combo.current()
-            if 0 <= selected_index < len(self.window_handles):
-                new_hwnd = self.window_handles[selected_index]
-                if new_hwnd != self.app.selected_hwnd:
-                    self.app.selected_hwnd = new_hwnd
-                    title = self.window_combo.get().split(":", 1)[-1].strip()
-                    self.app.update_status(f"Window selected: {title}")
-                    print(f"Selected window HWND: {self.app.selected_hwnd}")
-                    # Load ROIs and context specific to this window
-                    self.app.load_rois_for_hwnd(new_hwnd)
-                    # If capture was running, maybe notify user to restart?
-                    if self.app.capturing:
-                        self.app.update_status(f"Window changed to {title}. Restart capture if needed.")
-            else:
-                # Handle case where selection is somehow invalid
-                if self.app.selected_hwnd is not None:
-                    self.app.selected_hwnd = None
-                    self.app.update_status("No window selected.")
-                    self.app.load_rois_for_hwnd(None)
+            if not self.additional_context_text.winfo_exists(): return
+            new_context = self.additional_context_text.get("1.0", tk.END).strip()
+            all_game_contexts = get_setting("game_specific_context", {})
+            if all_game_contexts.get(game_hash) != new_context:
+                all_game_contexts[game_hash] = new_context
+                if update_settings({"game_specific_context": all_game_contexts}):
+                    print(f"Game-specific context saved for hash {game_hash[:8]}...")
+                    self.app.update_status("Game context saved.")
+                else: messagebox.showerror("Error", "Failed to save game-specific context.")
+        except tk.TclError: print("Error accessing context text widget (might be destroyed).")
+        except Exception as e: print(f"Error saving game context: {e}"); messagebox.showerror("Error", f"Failed to save game context: {e}")
+        if event and event.keysym == 'Return': return "break"
+
+    def save_basic_settings(self, event=None):
+        """Save non-preset, non-game-specific settings like target language."""
+        new_target_lang = self.target_lang_entry.get().strip()
+        settings_to_update = {}
+        changed = False
+        if new_target_lang != self.target_language:
+            settings_to_update["target_language"] = new_target_lang
+            self.target_language = new_target_lang
+            changed = True
+        if changed and settings_to_update:
+            if update_settings(settings_to_update):
+                print("General translation settings (language) updated.")
+                self.app.update_status("Target language saved.")
+            else: messagebox.showerror("Error", "Failed to save target language setting.")
+
+    def toggle_auto_translate(self):
+        """Save the auto-translate setting."""
+        self.auto_translate_enabled = self.auto_translate_var.get()
+        if set_setting("auto_translate", self.auto_translate_enabled):
+            status_msg = f"Auto-translate {'enabled' if self.auto_translate_enabled else 'disabled'}."
+            print(status_msg)
+            self.app.update_status(status_msg)
+            if self.app.floating_controls and self.app.floating_controls.winfo_exists():
+                self.app.floating_controls.auto_var.set(self.auto_translate_enabled)
+        else: messagebox.showerror("Error", "Failed to save auto-translate setting.")
+
+    def is_auto_translate_enabled(self):
+        """Check if auto-translation is enabled."""
+        return self.auto_translate_var.get()
+
+    def get_translation_config(self):
+        """Get the current translation preset AND general settings (NO system prompt from UI)."""
+        preset_name = self.preset_combo.get()
+        if not preset_name or preset_name not in self.translation_presets:
+            messagebox.showerror("Error", "No valid translation preset selected.", parent=self.app.master)
+            return None
+
+        preset_config_base = self.translation_presets.get(preset_name)
+        if not preset_config_base:
+            messagebox.showerror("Error", f"Could not load preset data for '{preset_name}'.", parent=self.app.master)
+            return None
+
+        api_key_from_ui = self.api_key_entry.get().strip()
+
+        try:
+            preset_config_from_ui = {
+                "api_key": api_key_from_ui,
+                "api_url": self.api_url_entry.get().strip(),
+                "model": self.model_entry.get().strip(),
+                # "system_prompt": self.system_prompt_text.get("1.0", tk.END).strip(), # REMOVED
+                "temperature": float(self.temperature_entry.get().strip() or 0.3),
+                "top_p": float(self.top_p_entry.get().strip() or 1.0),
+                "frequency_penalty": float(self.frequency_penalty_entry.get().strip() or 0.0),
+                "presence_penalty": float(self.presence_penalty_entry.get().strip() or 0.0),
+                "max_tokens": int(self.max_tokens_entry.get().strip() or 1000),
+                "context_limit": int(self.context_limit_entry.get().strip() or 10)
+            }
+        except ValueError as e:
+            messagebox.showerror("Error", f"Invalid number format in Preset Details: {e}", parent=self.app.master)
+            return None
+        except tk.TclError:
+            messagebox.showerror("Error", "UI elements missing. Cannot read preset details.", parent=self.app.master)
+            return None
+
+        target_lang = self.target_lang_entry.get().strip()
+        try:
+            additional_ctx = self.additional_context_text.get("1.0", tk.END).strip()
+        except tk.TclError: additional_ctx = ""
+
+        working_config = preset_config_from_ui
+        working_config["target_language"] = target_lang
+        working_config["additional_context"] = additional_ctx
+
+        if not working_config.get("api_url"):
+            messagebox.showwarning("Warning", "API URL is missing in preset details.", parent=self.app.master)
+        if not working_config.get("model"):
+            messagebox.showwarning("Warning", "Model name is missing in preset details.", parent=self.app.master)
+
+        return working_config
+
+    def on_preset_selected(self, event=None):
+        """Load the selected preset into the UI fields (excluding system prompt)."""
+        preset_name = self.preset_combo.get()
+        if not preset_name or preset_name not in self.translation_presets:
+            print(f"Invalid preset selected: {preset_name}")
+            return
+
+        preset = self.translation_presets[preset_name]
+        print(f"Loading preset '{preset_name}' into UI.")
+
+        try:
+            preset_api_key = preset.get("api_key", "")
+            self.api_key_entry.delete(0, tk.END)
+            self.api_key_entry.insert(0, preset_api_key)
+
+            self.api_url_entry.delete(0, tk.END)
+            self.api_url_entry.insert(0, preset.get("api_url", ""))
+
+            self.model_entry.delete(0, tk.END)
+            self.model_entry.insert(0, preset.get("model", ""))
+
+            # self.system_prompt_text.delete("1.0", tk.END) # REMOVED
+            # self.system_prompt_text.insert("1.0", preset.get("system_prompt", "")) # REMOVED
+
+            self.context_limit_entry.delete(0, tk.END)
+            self.context_limit_entry.insert(0, str(preset.get("context_limit", 10)))
+
+            self.temperature_entry.delete(0, tk.END)
+            self.temperature_entry.insert(0, str(preset.get("temperature", 0.3)))
+
+            self.top_p_entry.delete(0, tk.END)
+            self.top_p_entry.insert(0, str(preset.get("top_p", 1.0)))
+
+            self.frequency_penalty_entry.delete(0, tk.END)
+            self.frequency_penalty_entry.insert(0, str(preset.get("frequency_penalty", 0.0)))
+
+            self.presence_penalty_entry.delete(0, tk.END)
+            self.presence_penalty_entry.insert(0, str(preset.get("presence_penalty", 0.0)))
+
+            self.max_tokens_entry.delete(0, tk.END)
+            self.max_tokens_entry.insert(0, str(preset.get("max_tokens", 1000)))
+
+            set_setting("last_preset_name", preset_name)
+        except tk.TclError:
+            print("Error updating preset UI elements (might be destroyed).")
+
+    def get_current_preset_values_for_saving(self):
+        """Get ONLY the preset-specific values from the UI fields for saving (NO system prompt)."""
+        try:
+            preset_data = {
+                "api_key": self.api_key_entry.get().strip(),
+                "api_url": self.api_url_entry.get().strip(),
+                "model": self.model_entry.get().strip(),
+                # "system_prompt": self.system_prompt_text.get("1.0", tk.END).strip(), # REMOVED
+                "temperature": float(self.temperature_entry.get().strip() or 0.3),
+                "top_p": float(self.top_p_entry.get().strip() or 1.0),
+                "frequency_penalty": float(self.frequency_penalty_entry.get().strip() or 0.0),
+                "presence_penalty": float(self.presence_penalty_entry.get().strip() or 0.0),
+                "max_tokens": int(self.max_tokens_entry.get().strip() or 1000),
+                "context_limit": int(self.context_limit_entry.get().strip() or 10)
+            }
+            if not preset_data["api_url"] or not preset_data["model"]:
+                print("Warning: Saving preset with potentially empty API URL or Model.")
+            return preset_data
+        except ValueError as e:
+            messagebox.showerror("Error", f"Invalid number format in Preset Details: {e}", parent=self.app.master)
+            return None
+        except tk.TclError:
+            messagebox.showerror("Error", "UI elements missing. Cannot read preset details.", parent=self.app.master)
+            return None
         except Exception as e:
-            # General error handling
-            self.app.selected_hwnd = None
-            self.app.update_status(f"Error selecting window: {e}")
-            self.app.load_rois_for_hwnd(None)
+            messagebox.showerror("Error", f"Could not read preset settings: {e}", parent=self.app.master)
+            return None
 
-    def on_engine_selected(self, event=None):
-        """Handles selection of a new OCR engine."""
-        new_engine = self.engine_var.get()
-        if new_engine in self.OCR_ENGINES:
-            print(f"OCR Engine selection changed to: {new_engine}")
-            set_setting("ocr_engine", new_engine)
-            # Trigger the app to update/initialize the selected engine
-            # Pass the currently selected language as well
-            current_lang = self.lang_var.get() or "jpn"
-            self.app.set_ocr_engine(new_engine, current_lang)
+    def save_preset(self):
+        """Save the current UI settings (preset part) to the selected preset."""
+        preset_name = self.preset_combo.get()
+        if not preset_name:
+            messagebox.showwarning("Warning", "No preset selected to save over.", parent=self.app.master)
+            return
+        preset_data = self.get_current_preset_values_for_saving()
+        if preset_data is None: return
+        confirm = messagebox.askyesno("Confirm Save", f"Overwrite preset '{preset_name}' with current settings?", parent=self.app.master)
+        if not confirm: return
+        self.translation_presets[preset_name] = preset_data
+        if save_translation_presets(self.translation_presets):
+            messagebox.showinfo("Saved", f"Preset '{preset_name}' has been updated.", parent=self.app.master)
+
+    def save_preset_as(self):
+        """Save the current UI settings (preset part) as a new preset."""
+        new_name = simpledialog.askstring("Save Preset As", "Enter a name for the new preset:", parent=self.app.master)
+        if not new_name: return
+        new_name = new_name.strip()
+        if not new_name: messagebox.showwarning("Warning", "Preset name cannot be empty.", parent=self.app.master); return
+        preset_data = self.get_current_preset_values_for_saving()
+        if preset_data is None: return
+        if new_name in self.translation_presets:
+            overwrite = messagebox.askyesno("Overwrite", f"Preset '{new_name}' already exists. Overwrite?", parent=self.app.master)
+            if not overwrite: return
+        self.translation_presets[new_name] = preset_data
+        if save_translation_presets(self.translation_presets):
+            self.preset_names = sorted(list(self.translation_presets.keys()))
+            self.preset_combo['values'] = self.preset_names
+            self.preset_combo.set(new_name)
+            set_setting("last_preset_name", new_name)
+            messagebox.showinfo("Saved", f"Preset '{new_name}' has been saved.", parent=self.app.master)
         else:
-            self.app.update_status("Invalid OCR engine selected.")
+            if new_name in self.translation_presets: del self.translation_presets[new_name]
 
-    def on_language_changed(self, event=None):
-        """Handles selection of a new OCR language."""
-        new_lang = self.lang_var.get()
-        if new_lang in self.OCR_LANGUAGES:
-            print(f"OCR Language changed to: {new_lang}")
-            set_setting("ocr_language", new_lang)
-            # Trigger the app to update the OCR engine with the new language
-            # Pass the currently selected engine type
-            current_engine = self.engine_var.get() or "paddle"
-            self.app.update_ocr_language(new_lang, current_engine)
-        else:
-            self.app.update_status("Invalid language selected.")
+    def delete_preset(self):
+        """Delete the selected preset."""
+        preset_name = self.preset_combo.get()
+        if not preset_name: messagebox.showwarning("Warning", "No preset selected to delete.", parent=self.app.master); return
+        confirm = messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete preset '{preset_name}'?", parent=self.app.master)
+        if not confirm: return
+        if preset_name in self.translation_presets:
+            original_data = self.translation_presets[preset_name]
+            del self.translation_presets[preset_name]
+            if save_translation_presets(self.translation_presets):
+                self.preset_names = sorted(list(self.translation_presets.keys()))
+                self.preset_combo['values'] = self.preset_names
+                new_selection = ""
+                if self.preset_names: new_selection = self.preset_names[0]; self.preset_combo.current(0)
+                else: self.preset_combo.set("")
+                if get_setting("last_preset_name") == preset_name: set_setting("last_preset_name", new_selection)
+                self.on_preset_selected()
+                messagebox.showinfo("Deleted", f"Preset '{preset_name}' has been deleted.", parent=self.app.master)
+            else:
+                self.translation_presets[preset_name] = original_data
+                messagebox.showerror("Error", "Failed to save presets after deletion. The preset was not deleted.", parent=self.app.master)
 
-    def update_status(self, message):
-        """Updates the status label text."""
-        self.status_label.config(text=f"Status: {message}")
+    def _start_translation_thread(self, force_recache=False):
+        """Internal helper to start the translation thread."""
+        config = self.get_translation_config()
+        if config is None:
+            print("Translation cancelled due to configuration error.")
+            self.app.update_status("Translation cancelled: Configuration error.")
+            return
+        current_hwnd = self.app.selected_hwnd
+        if not current_hwnd:
+            messagebox.showwarning("Warning", "No game window selected. Cannot translate.", parent=self.app.master)
+            self.app.update_status("Translation cancelled: No window selected.")
+            return
 
-    # --- State Update Callbacks from App ---
-    def on_capture_started(self):
-        self.start_btn.config(state=tk.DISABLED)
-        self.refresh_btn.config(state=tk.DISABLED)
-        self.window_combo.config(state=tk.DISABLED)
-        self.stop_btn.config(state=tk.NORMAL)
-        self.snapshot_btn.config(state=tk.NORMAL)
-        self.live_view_btn.config(state=tk.DISABLED) # Cannot return to live if already live
+        # Get the stable texts dictionary directly
+        texts_to_translate = {name: text for name, text in self.app.stable_texts.items() if text and text.strip()}
 
-    def on_capture_stopped(self):
-        self.start_btn.config(state=tk.NORMAL)
-        self.refresh_btn.config(state=tk.NORMAL)
-        self.window_combo.config(state="readonly") # Re-enable selection
-        self.stop_btn.config(state=tk.DISABLED)
-        self.snapshot_btn.config(state=tk.DISABLED) # Cannot snapshot if not capturing
-        self.live_view_btn.config(state=tk.DISABLED)
+        if not texts_to_translate:
+            print("No stable text available to translate.")
+            self.app.update_status("No stable text to translate.")
+            try:
+                if self.translation_display.winfo_exists():
+                    self.translation_display.config(state=tk.NORMAL)
+                    self.translation_display.delete(1.0, tk.END)
+                    self.translation_display.insert(tk.END, "[No stable text detected]")
+                    self.translation_display.config(state=tk.DISABLED)
+            except tk.TclError: pass
+            if hasattr(self.app, 'overlay_manager'): self.app.overlay_manager.clear_all_overlays()
+            return
 
-    def on_snapshot_taken(self):
-        # Snapshot implies capture was running, so keep stop/snapshot enabled
-        # self.start_btn.config(state=tk.DISABLED) # Keep disabled
-        # self.refresh_btn.config(state=tk.DISABLED) # Keep disabled
-        # self.window_combo.config(state=tk.DISABLED) # Keep disabled
-        # self.stop_btn.config(state=tk.NORMAL) # Keep enabled
-        # self.snapshot_btn.config(state=tk.NORMAL) # Keep enabled
-        self.live_view_btn.config(state=tk.NORMAL) # Enable returning to live
+        # No longer need aggregated_input_text here
+        # aggregated_input_text = "\n".join([f"[{name}]: {text}" for name, text in texts_to_translate.items()])
 
-    def on_live_view_resumed(self):
-        self.live_view_btn.config(state=tk.DISABLED)
-        # Restore state based on whether capture is still active
-        if self.app.capturing:
-            self.snapshot_btn.config(state=tk.NORMAL)
-            # Other buttons should already be in the 'capturing' state
-        else:
-            # If capture somehow stopped while snapshot was active, reset fully
-            self.snapshot_btn.config(state=tk.DISABLED)
-            self.on_capture_stopped()
+        status_msg = "Translating..." if not force_recache else "Forcing retranslation..."
+        self.app.update_status(status_msg)
+        try:
+            if self.translation_display.winfo_exists():
+                self.translation_display.config(state=tk.NORMAL)
+                self.translation_display.delete(1.0, tk.END)
+                self.translation_display.insert(tk.END, f"{status_msg}\n")
+                self.translation_display.config(state=tk.DISABLED)
+        except tk.TclError: pass
+        if hasattr(self.app, 'overlay_manager'):
+            for roi_name in texts_to_translate: self.app.overlay_manager.update_overlay(roi_name, "...")
 
+        def translation_thread():
+            try:
+                # Pass the dictionary directly
+                translated_segments = translate_text(
+                    stable_texts_dict=texts_to_translate, # CHANGED: Pass dictionary
+                    hwnd=current_hwnd,
+                    preset=config, # Preset no longer contains system_prompt from UI
+                    target_language=config["target_language"],
+                    additional_context=config["additional_context"],
+                    context_limit=config.get("context_limit", 10),
+                    force_recache=force_recache
+                )
+                if "error" in translated_segments:
+                    error_msg = translated_segments["error"]
+                    print(f"Translation API Error: {error_msg}")
+                    self.app.master.after_idle(lambda: self.update_translation_display_error(error_msg))
+                    if hasattr(self.app, 'overlay_manager'):
+                        first_roi = next(iter(texts_to_translate), None)
+                        if first_roi:
+                            self.app.master.after_idle(lambda name=first_roi: self.app.overlay_manager.update_overlay(name, f"Error!"))
+                            for r_name in texts_to_translate:
+                                if r_name != first_roi: self.app.master.after_idle(lambda n=r_name: self.app.overlay_manager.update_overlay(n, ""))
+                else:
+                    print("Translation successful.")
+                    preview_lines = []
+                    # Use the original input dictionary keys for iteration order consistency if needed
+                    # Or iterate through ROIs if order matters and ROIs are available
+                    rois_to_iterate = self.app.rois if hasattr(self.app, 'rois') else []
+                    sorted_roi_names = [roi.name for roi in rois_to_iterate if roi.name in translated_segments]
+                    # Add any missing keys from translated_segments (shouldn't happen ideally)
+                    for name in translated_segments:
+                        if name not in sorted_roi_names:
+                            sorted_roi_names.append(name)
+
+                    for roi_name in sorted_roi_names:
+                        # Get original text from the input dictionary
+                        original_text = texts_to_translate.get(roi_name, "") # Use input dict
+                        translated_text = translated_segments.get(roi_name)
+                        if original_text.strip(): # Check original text, not stable_texts which might update
+                            preview_lines.append(f"[{roi_name}]:")
+                            preview_lines.append(translated_text if translated_text else "[Translation N/A]")
+                            preview_lines.append("")
+                    preview_text = "\n".join(preview_lines).strip()
+                    self.app.master.after_idle(lambda seg=translated_segments, prev=preview_text: self.update_translation_results(seg, prev))
+            except Exception as e:
+                error_msg = f"Unexpected error during translation thread: {str(e)}"
+                print(error_msg)
+                import traceback
+                traceback.print_exc()
+                self.app.master.after_idle(lambda: self.update_translation_display_error(error_msg))
+                if hasattr(self.app, 'overlay_manager'): self.app.master.after_idle(self.app.overlay_manager.clear_all_overlays)
+
+        threading.Thread(target=translation_thread, daemon=True).start()
+
+    def perform_translation(self):
+        """Translate the stable text using the current settings (uses cache)."""
+        self._start_translation_thread(force_recache=False)
+
+    def perform_force_translation(self):
+        """Force re-translation of the stable text, skipping cache check but updating cache."""
+        self._start_translation_thread(force_recache=True)
+
+    def update_translation_results(self, translated_segments, preview_text):
+        """Update the preview display and overlays with translation results. Runs in main thread."""
+        self.app.update_status("Translation complete.")
+        try:
+            if self.translation_display.winfo_exists():
+                self.translation_display.config(state=tk.NORMAL)
+                self.translation_display.delete(1.0, tk.END)
+                self.translation_display.insert(tk.END, preview_text if preview_text else "[No translation received]")
+                self.translation_display.config(state=tk.DISABLED)
+        except tk.TclError: pass
+        if hasattr(self.app, 'overlay_manager'): self.app.overlay_manager.update_overlays(translated_segments)
+        self.last_translation_result = translated_segments
+        self.last_translation_input = self.app.stable_texts.copy()
+
+    def update_translation_display_error(self, error_message):
+        """Update the preview display with an error message. Runs in main thread."""
+        self.app.update_status(f"Translation Error: {error_message[:50]}...")
+        try:
+            if self.translation_display.winfo_exists():
+                self.translation_display.config(state=tk.NORMAL)
+                self.translation_display.delete(1.0, tk.END)
+                self.translation_display.insert(tk.END, f"Translation Error:\n\n{error_message}")
+                self.translation_display.config(state=tk.DISABLED)
+        except tk.TclError: pass
+        self.last_translation_result = None
+        self.last_translation_input = None
+
+    def clear_all_translation_cache(self):
+        """Clear ALL translation cache files and show confirmation."""
+        if messagebox.askyesno("Confirm Clear All Cache", "Are you sure you want to delete ALL translation cache files?", parent=self.app.master):
+            result = clear_all_cache()
+            messagebox.showinfo("Cache Cleared", result, parent=self.app.master)
+            self.app.update_status("All translation cache cleared.")
+
+    def clear_current_translation_cache(self):
+        """Clear the translation cache for the current game and show confirmation."""
+        current_hwnd = self.app.selected_hwnd
+        if not current_hwnd: messagebox.showwarning("Warning", "No game window selected. Cannot clear current game cache.", parent=self.app.master); return
+        if messagebox.askyesno("Confirm Clear Current Cache", "Are you sure you want to delete the translation cache for the currently selected game?", parent=self.app.master):
+            result = clear_current_game_cache(current_hwnd)
+            messagebox.showinfo("Cache Cleared", result, parent=self.app.master)
+            self.app.update_status("Current game translation cache cleared.")
+
+    def reset_translation_context(self):
+        """Reset the translation context history and delete the file for the current game."""
+        current_hwnd = self.app.selected_hwnd
+        if messagebox.askyesno("Confirm Reset Context", "Are you sure you want to reset the translation context history for the current game?\n(This will delete the saved history file)", parent=self.app.master):
+            result = reset_context(current_hwnd)
+            messagebox.showinfo("Context Reset", result, parent=self.app.master)
+            self.app.update_status("Translation context reset.")
+
+# --- END OF FILE ui/translation_tab.py ---
 ```
 
---- END OF FILE ui/capture_tab.py ---
+--- START OF FILE translation.py ---
+```python
+# --- START OF FILE utils/translation.py ---
+
+import json
+import re
+import os
+from openai import OpenAI, APIError # Import APIError for specific handling
+from pathlib import Path
+import hashlib # For cache key generation
+import time # For potential corrupted cache backup naming
+from utils.capture import get_executable_details # Import the new function
+
+# File-based cache settings
+APP_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) # Get app root directory
+CACHE_DIR = APP_DIR / "cache"
+CONTEXT_DIR = APP_DIR / "context_history" # NEW: Directory for context files
+
+# Context management (global list - represents the currently loaded context)
+context_messages = []
+
+# --- Logging Helper ---
+def format_message_for_log(message):
+    """Formats a message dictionary for concise logging."""
+    role = message.get('role', 'unknown')
+    content = message.get('content', '')
+    content_display = (content[:75] + '...') if len(content) > 78 else content
+    content_display = content_display.replace('\n', '\\n')
+    return f"[{role}] '{content_display}'"
+
+# --- Directory and Hashing ---
+
+def _ensure_cache_dir():
+    """Make sure the cache directory exists"""
+    try: CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception as e: print(f"Error creating cache directory {CACHE_DIR}: {e}")
+
+def _ensure_context_dir():
+    """Make sure the context history directory exists"""
+    try: CONTEXT_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception as e: print(f"Error creating context directory {CONTEXT_DIR}: {e}")
+
+def _get_game_hash(hwnd):
+    """Generates a hash based on the game's executable path and size."""
+    if not hwnd: return None
+    exe_path, file_size = get_executable_details(hwnd)
+    if exe_path and file_size is not None:
+        try:
+            identity_string = f"{os.path.normpath(exe_path).lower()}|{file_size}"
+            hasher = hashlib.sha256()
+            hasher.update(identity_string.encode('utf-8'))
+            return hasher.hexdigest()
+        except Exception as e: print(f"Error generating game hash: {e}")
+    return None
+
+def _get_cache_file_path(hwnd):
+    """Gets the specific cache file path for the given game window."""
+    if hwnd is None: return None
+    game_hash = _get_game_hash(hwnd)
+    if game_hash: return CACHE_DIR / f"{game_hash}.json"
+    else: print("Warning: Could not determine game hash. Using default cache file."); return CACHE_DIR / "default_cache.json"
+
+def _get_context_file_path(hwnd):
+    """Gets the specific context history file path for the given game window."""
+    if hwnd is None: return None
+    game_hash = _get_game_hash(hwnd)
+    if game_hash: return CONTEXT_DIR / f"{game_hash}_context.json"
+    else: print("Warning: Could not determine game hash for context file path."); return None
+
+# --- Cache Handling ---
+
+def _load_cache(cache_file_path):
+    """Load the translation cache from the specified game file"""
+    _ensure_cache_dir()
+    try:
+        if cache_file_path.exists():
+            with open(cache_file_path, 'r', encoding='utf-8') as f: content = f.read()
+            if not content: return {}
+            return json.loads(content)
+    except json.JSONDecodeError:
+        print(f"Warning: Cache file {cache_file_path} is corrupted or empty. Starting fresh cache.")
+        try:
+            corrupted_path = cache_file_path.parent / f"{cache_file_path.name}.corrupted_{int(time.time())}"
+            os.rename(cache_file_path, corrupted_path)
+            print(f"Corrupted cache backed up to {corrupted_path}")
+        except Exception as backup_err: print(f"Error backing up corrupted cache file: {backup_err}")
+        return {}
+    except Exception as e: print(f"Error loading cache from {cache_file_path}: {e}")
+    return {}
+
+def _save_cache(cache, cache_file_path):
+    """Save the translation cache to the specified game file"""
+    _ensure_cache_dir()
+    try:
+        with open(cache_file_path, 'w', encoding='utf-8') as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
+    except Exception as e: print(f"Error saving cache to {cache_file_path}: {e}")
+
+def clear_current_game_cache(hwnd):
+    """Clear the translation cache for the currently selected game."""
+    cache_file_path = _get_cache_file_path(hwnd)
+    if not cache_file_path: return "Could not identify game to clear cache (or cache skipped)."
+    if cache_file_path.exists():
+        try:
+            os.remove(cache_file_path)
+            print(f"Cache file deleted: {cache_file_path}")
+            return f"Cache cleared for the current game ({cache_file_path.stem})."
+        except Exception as e: print(f"Error deleting cache file {cache_file_path}: {e}"); return f"Error clearing current game cache: {e}"
+    else: print(f"Cache file not found for current game: {cache_file_path}"); return "Cache for the current game was already empty."
+
+def clear_all_cache():
+    """Clear all translation cache files in the cache directory."""
+    _ensure_cache_dir()
+    cleared_count = 0
+    errors = []
+    try:
+        for item in CACHE_DIR.iterdir():
+            if item.is_file() and item.suffix == '.json':
+                try: os.remove(item); cleared_count += 1; print(f"Deleted cache file: {item.name}")
+                except Exception as e: errors.append(item.name); print(f"Error deleting cache file {item.name}: {e}")
+        if errors: return f"Cleared {cleared_count} cache files. Errors deleting: {', '.join(errors)}."
+        elif cleared_count > 0: return f"Successfully cleared all {cleared_count} translation cache files."
+        else: return "Cache directory was empty or contained no cache files."
+    except Exception as e: print(f"Error iterating cache directory {CACHE_DIR}: {e}"); return f"Error accessing cache directory: {e}"
+
+# --- Context History Handling ---
+
+def _load_context(hwnd):
+    """Loads context history from the game-specific file into the global list."""
+    global context_messages
+    context_messages = []
+    if hwnd is None: print("[CONTEXT] HWND is None, skipping context load."); return
+    _ensure_context_dir()
+    context_file_path = _get_context_file_path(hwnd)
+    if not context_file_path: print("[CONTEXT] Cannot load context, failed to get file path."); return
+    if context_file_path.exists():
+        try:
+            with open(context_file_path, 'r', encoding='utf-8') as f: content = f.read()
+            if content:
+                loaded_history = json.loads(content)
+                if isinstance(loaded_history, list):
+                    context_messages = loaded_history
+                    print(f"[CONTEXT] Loaded {len(context_messages)} messages from {context_file_path.name}")
+                else: print(f"[CONTEXT] Error: Loaded context from {context_file_path.name} is not a list. Resetting history.")
+            else: print(f"[CONTEXT] Context file {context_file_path.name} is empty.")
+        except json.JSONDecodeError: print(f"[CONTEXT] Error: Context file {context_file_path.name} is corrupted. Resetting history.")
+        except Exception as e: print(f"[CONTEXT] Error loading context from {context_file_path.name}: {e}. Resetting history.")
+    else: print(f"[CONTEXT] No context file found for current game ({context_file_path.name}). Starting fresh history.")
+
+def _save_context(hwnd):
+    """Saves the current global context_messages (full history) to the game-specific file."""
+    global context_messages
+    if hwnd is None: return
+    _ensure_context_dir()
+    context_file_path = _get_context_file_path(hwnd)
+    if not context_file_path: print("[CONTEXT] Cannot save context, failed to get file path."); return
+    try:
+        with open(context_file_path, 'w', encoding='utf-8') as f:
+            # Save the entire context_messages list
+            json.dump(context_messages, f, ensure_ascii=False, indent=2)
+    except Exception as e: print(f"Error saving context to {context_file_path.name}: {e}")
+
+def reset_context(hwnd):
+    """Reset the global translation context history AND delete the game-specific file."""
+    global context_messages
+    context_messages = []
+    print("[CONTEXT] In-memory context history reset.")
+    if hwnd is None: return "Context history reset (no game specified to delete file)."
+    context_file_path = _get_context_file_path(hwnd)
+    if context_file_path and context_file_path.exists():
+        try:
+            os.remove(context_file_path)
+            print(f"[CONTEXT] Deleted context file: {context_file_path.name}")
+            return "Translation context history reset and file deleted."
+        except Exception as e: print(f"[CONTEXT] Error deleting context file {context_file_path.name}: {e}"); return f"Context history reset, but error deleting file: {e}"
+    elif context_file_path: return "Context history reset (no file found to delete)."
+    else: return "Context history reset (could not determine file path)."
+
+# MODIFIED add_context_message
+def add_context_message(message):
+    """Add a message to the global translation context history. No trimming here."""
+    global context_messages
+    context_messages.append(message)
+    # No trimming logic here - the full history is maintained in context_messages
+
+# --- Translation Core Logic ---
+
+def get_cache_key(text, target_language):
+    """Generate a unique cache key based ONLY on the input text and target language."""
+    hasher = hashlib.sha256()
+    hasher.update(text.encode('utf-8'))
+    hasher.update(target_language.encode('utf-8'))
+    return hasher.hexdigest()
+
+def get_cached_translation(cache_key, cache_file_path):
+    """Get a cached translation if it exists from the specific game cache file."""
+    if not cache_file_path: return None
+    cache = _load_cache(cache_file_path)
+    return cache.get(cache_key)
+
+def set_cache_translation(cache_key, translation, cache_file_path):
+    """Cache a translation result to the specific game cache file."""
+    if not cache_file_path: return
+    cache = _load_cache(cache_file_path)
+    cache[cache_key] = translation
+    _save_cache(cache, cache_file_path)
+
+def parse_translation_output(response_text, original_tag_mapping):
+    """
+    Parse the translation output from a tagged format (<|n|>)
+    and map it back to the original ROI names using the tag_mapping.
+    """
+    parsed_segments = {}
+    # Updated pattern to better handle potential whitespace and newlines around tags/content
+    pattern = r"<\|(\d+)\|>(.*?)(?=<\|\d+\|>|$)"
+    matches = re.findall(pattern, response_text, re.DOTALL | re.MULTILINE)
+
+    if matches:
+        for segment_number, content in matches:
+            original_roi_name = original_tag_mapping.get(segment_number)
+            if original_roi_name:
+                # Clean leading/trailing whitespace, including newlines
+                cleaned_content = content.strip()
+                # Remove potential trailing tag from the current segment's content
+                cleaned_content = re.sub(r'<\|\d+\|>$', '', cleaned_content).strip()
+                parsed_segments[original_roi_name] = cleaned_content
+            else:
+                print(f"Warning: Received segment number '{segment_number}' which was not in the original mapping.")
+    else:
+        # Fallback: Try line-based parsing if the main pattern fails
+        # This is less robust if content has newlines but might catch simple cases
+        line_pattern = r"^\s*<\|(\d+)\|>\s*(.*)$"
+        lines = response_text.strip().split('\n')
+        found_line_match = False
+        for line in lines:
+            match = re.match(line_pattern, line)
+            if match:
+                found_line_match = True
+                segment_number, content = match.groups()
+                original_roi_name = original_tag_mapping.get(segment_number)
+                if original_roi_name:
+                    parsed_segments[original_roi_name] = content.strip()
+                else:
+                    print(f"Warning: Received segment number '{segment_number}' (line match) which was not in original mapping.")
+
+        # If still no matches and only one ROI was expected, assume plain text response
+        if not found_line_match and len(original_tag_mapping) == 1 and not response_text.startswith("<|"):
+            first_tag = next(iter(original_tag_mapping))
+            first_roi = original_tag_mapping[first_tag]
+            print(f"[LLM PARSE] Warning: Response had no tags, assuming plain text response for single ROI '{first_roi}'.")
+            parsed_segments[first_roi] = response_text.strip()
+        elif not found_line_match and not matches:
+            # If multiple ROIs were expected but no tags found
+            print("[LLM PARSE] Failed to parse any <|n|> segments from response and multiple segments expected.")
+            return {"error": f"Error: Unable to extract formatted translation.\nRaw response:\n{response_text}"}
+
+    # Check for missing ROIs compared to the original input
+    missing_rois = set(original_tag_mapping.values()) - set(parsed_segments.keys())
+    if missing_rois:
+        print(f"[LLM PARSE] Warning: Translation response missing segments for ROIs: {', '.join(missing_rois)}")
+        for roi_name in missing_rois:
+            parsed_segments[roi_name] = "[Translation Missing]" # Add placeholder
+
+    # Final check if parsing completely failed
+    if not parsed_segments and original_tag_mapping:
+        print("[LLM PARSE] Error: Failed to parse any segments despite expecting tags.")
+        return {"error": f"Error: Failed to extract any segments.\nRaw response:\n{response_text}"}
+
+    return parsed_segments
+
+# MODIFIED preprocess_text_for_translation
+def preprocess_text_for_translation(stable_texts_dict):
+    """
+    Convert input dictionary {roi_name: text} to the numbered format <|1|> text.
+    Handles multi-line text within each ROI's content correctly.
+    Returns the preprocessed string and the tag mapping.
+    """
+    preprocessed_lines = []
+    tag_mapping = {}
+    segment_count = 1
+
+    # Iterate through the dictionary items directly
+    for roi_name, content in stable_texts_dict.items():
+        content_stripped = content.strip() if content else ""
+        if content_stripped: # Only process if content is not empty after stripping
+            tag_mapping[str(segment_count)] = roi_name
+            # Append the full content (preserving internal newlines) with the tag
+            preprocessed_lines.append(f"<|{segment_count}|> {content_stripped}")
+            segment_count += 1
+        else:
+            print(f"Skipping empty content for ROI: {roi_name}")
+
+    if not tag_mapping:
+        print("Warning: No non-empty text found in input dictionary during preprocessing.")
+
+    # Join the processed lines with newlines for the final string
+    return '\n'.join(preprocessed_lines), tag_mapping
+
+# MODIFIED translate_text function signature and preprocessing call
+def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additional_context="", context_limit=10, force_recache=False, skip_cache=False, skip_history=False):
+    """
+    Translate the given text segments (from a dictionary) using an OpenAI-compatible API client,
+    using game-specific caching and context. System prompt is constructed internally.
+    Context history sent to the API is limited by context_limit.
+    """
+    cache_file_path = None if skip_cache else _get_cache_file_path(hwnd)
+    if not skip_cache and not cache_file_path and hwnd is not None:
+        print("Error: Cannot proceed with cached translation without a valid game identifier.")
+        return {"error": "Could not determine cache file path for the game."}
+
+    # Preprocess the input dictionary into the tagged string format
+    preprocessed_text_for_llm, tag_mapping = preprocess_text_for_translation(stable_texts_dict)
+
+    if not preprocessed_text_for_llm or not tag_mapping:
+        print("No valid text segments found after preprocessing. Nothing to translate.")
+        return {} # Return empty dict if nothing to translate
+
+    # Cache key is based on the preprocessed text (what the LLM sees) and target language
+    cache_key = get_cache_key(preprocessed_text_for_llm, target_language)
+
+    # --- Cache Check ---
+    if not skip_cache and not force_recache:
+        cached_result = get_cached_translation(cache_key, cache_file_path)
+        if cached_result:
+            # Validate cache integrity (ensure all expected ROIs are present)
+            if isinstance(cached_result, dict) and not 'error' in cached_result:
+                # Check if all ROI names from the *original input* are keys in the cached result
+                if all(roi_name in cached_result for roi_name in stable_texts_dict.keys() if stable_texts_dict[roi_name].strip()):
+                    print(f"[CACHE] HIT for key: {cache_key[:10]}... in {cache_file_path.name if cache_file_path else 'N/A'}")
+                    return cached_result
+                else:
+                    print("[CACHE] WARN: Cached result incomplete or missing expected ROIs, fetching fresh translation.")
+            else:
+                print("[CACHE] WARN: Cached result format mismatch or error, fetching fresh translation.")
+        else:
+            print(f"[CACHE] MISS for key: {cache_key[:10]}... in {cache_file_path.name if cache_file_path else 'N/A'}")
+    elif skip_cache: print(f"[CACHE] SKIP requested (skip_cache=True)")
+    elif force_recache: print(f"[CACHE] SKIP requested (force_recache=True) for key: {cache_key[:10]}...")
+    # --- End Cache Check ---
+
+
+    # --- Construct System Prompt Internally ---
+    base_system_prompt = (
+        "You are a professional translation assistant. Your task is to translate text segments accurately "
+        "from their source language into the target language specified in the user prompt. "
+        "The input text segments are marked with tags like <|1|>, <|2|>, etc. "
+        "Your response MUST strictly adhere to this format, reproducing the exact same tags for each corresponding translated segment. "
+        "For example, if the input is '<|1|> Hello\n<|2|> World' and the target language is French, the output must be '<|1|> Bonjour\n<|2|> Le monde'. "
+        "Do NOT include ANY extra text, commentary, explanations, greetings, summaries, apologies, or any conversational filler before, between, or after the tagged translations."
+    )
+    system_content = base_system_prompt
+    system_message = {"role": "system", "content": system_content}
+    # --- End System Prompt Construction ---
+
+    # --- Prepare Context History for API Call (Apply Limit) ---
+    history_to_send = []
+    if not skip_history:
+        global context_messages # Use the full history stored globally
+        try:
+            # Use the context_limit passed to this function (originating from the preset)
+            limit_exchanges = int(context_limit)
+            limit_exchanges = max(1, limit_exchanges) # Ensure at least 1 exchange
+        except (ValueError, TypeError):
+            limit_exchanges = 10 # Fallback default if invalid
+            print(f"[CONTEXT] Warning: Invalid context_limit value '{context_limit}'. Using default: {limit_exchanges}")
+
+        # Calculate the number of messages (user + assistant) to send based on the exchange limit
+        max_messages_to_send = limit_exchanges * 2
+
+        # Slice the global context_messages list to get only the most recent messages
+        if len(context_messages) > max_messages_to_send:
+            # Select the last 'max_messages_to_send' items from the full history
+            history_to_send = context_messages[-max_messages_to_send:]
+            print(f"[CONTEXT] Sending last {len(history_to_send)} messages ({limit_exchanges} exchanges limit) to API.")
+        else:
+            # Send the entire history if it's shorter than the limit
+            history_to_send = list(context_messages)
+            print(f"[CONTEXT] Sending all {len(history_to_send)} available messages (within {limit_exchanges} exchanges limit) to API.")
+    # --- End Context History Preparation ---
+
+    # --- Construct User Message for API ---
+    current_user_message_parts = []
+    if additional_context.strip():
+        current_user_message_parts.append(f"Additional context for this translation: {additional_context.strip()}")
+    current_user_message_parts.append(f"Translate the following segments into {target_language}, maintaining the exact <|n|> tags:")
+    # Use the preprocessed text string here
+    current_user_message_parts.append(preprocessed_text_for_llm)
+    current_user_content_with_context = "\n\n".join(current_user_message_parts)
+    current_user_message_for_api = {"role": "user", "content": current_user_content_with_context}
+    # --- End Construct User Message ---
+
+    # Prepare the user message that will be *added* to the full history (without additional context)
+    history_user_message = None
+    if not skip_history:
+        history_user_message_parts = [
+            f"Translate the following segments into {target_language}, maintaining the exact <|n|> tags:",
+            preprocessed_text_for_llm # Use the same preprocessed text for history
+        ]
+        history_user_content = "\n\n".join(history_user_message_parts)
+        history_user_message = {"role": "user", "content": history_user_content}
+
+    # Construct the final list of messages for the API call (using the potentially sliced history_to_send)
+    messages_for_api = [system_message] + history_to_send + [current_user_message_for_api]
+
+    if not preset.get("model") or not preset.get("api_url"):
+        missing = [f for f in ["model", "api_url"] if not preset.get(f)]
+        errmsg = f"Missing required preset fields: {', '.join(missing)}"
+        print(f"[API] Error: {errmsg}")
+        return {"error": errmsg}
+
+    payload = {
+        "model": preset["model"], "messages": messages_for_api,
+        "temperature": preset.get("temperature", 0.3), "max_tokens": preset.get("max_tokens", 1000)
+    }
+    for param in ["top_p", "frequency_penalty", "presence_penalty"]:
+        if param in preset and preset[param] is not None:
+            try: payload[param] = float(preset[param])
+            except (ValueError, TypeError): print(f"Warning: Invalid value for parameter '{param}': {preset[param]}. Skipping.")
+
+    print("-" * 20 + " LLM Request " + "-" * 20)
+    print(f"[API] Endpoint: {preset.get('api_url')}")
+    print(f"[API] Model: {preset['model']}")
+    print(f"[API] Payload Parameters (excluding messages):")
+    for key, value in payload.items():
+        if key != "messages": print(f"  - {key}: {value}")
+    print(f"[API] Messages ({len(messages_for_api)} total):")
+    if messages_for_api[0]['role'] == 'system': print(f"  - [system] (Internal prompt used)")
+    if history_to_send:
+        # Log the number of messages *actually sent*
+        print(f"  - [CONTEXT HISTORY - {len(history_to_send)} messages sent]:")
+        for msg in history_to_send: print(f"    - {format_message_for_log(msg)}")
+    print(f"  - {format_message_for_log(current_user_message_for_api)}")
+    print("-" * 55)
+
+    try:
+        api_key = preset.get("api_key") or None
+        client = OpenAI(base_url=preset.get("api_url"), api_key=api_key)
+    except Exception as e: print(f"[API] Error creating API client: {e}"); return {"error": f"Error creating API client: {e}"}
+
+    response_text = None
+    try:
+        completion = client.chat.completions.create(**payload)
+        if not completion.choices or not completion.choices[0].message or completion.choices[0].message.content is None:
+            print("[API] Error: Invalid response structure received from API.")
+            try: print(f"[API] Raw Response Object: {completion}")
+            except Exception as log_err: print(f"[API] Error logging raw response object: {log_err}")
+            return {"error": "Invalid response structure received from API."}
+        response_text = completion.choices[0].message.content.strip()
+        print("-" * 20 + " LLM Response " + "-" * 20)
+        print(f"[API] Raw Response Text ({len(response_text)} chars):\n{response_text}")
+        print("-" * 56)
+    except APIError as e:
+        error_message = str(e)
+        status_code = getattr(e, 'status_code', 'N/A')
+        try:
+            error_body = json.loads(getattr(e, 'body', '{}') or '{}')
+            detail = error_body.get('error', {}).get('message', '')
+            if detail: error_message = detail
+        except: pass
+        log_msg = f"[API] APIError during translation request: Status {status_code}, Error: {error_message}"
+        print(log_msg)
+        print(f"[API] Request Model: {payload.get('model')}")
+        return {"error": f"API Error ({status_code}): {error_message}"}
+    except Exception as e:
+        error_message = str(e)
+        log_msg = f"[API] Error during translation request: {error_message}"
+        print(log_msg)
+        import traceback
+        traceback.print_exc()
+        return {"error": f"Error during API request: {error_message}"}
+
+    # Parse the response using the original tag mapping
+    final_translations = parse_translation_output(response_text, tag_mapping)
+    if 'error' in final_translations:
+        print("[LLM PARSE] Parsing failed after receiving response.")
+        return final_translations
+
+    # --- Add to Stored History (using history_user_message) ---
+    if not skip_history and history_user_message:
+        add_to_history = True
+        # Check if the exact same user input was the last user input in the *full stored* history
+        if len(context_messages) >= 2:
+            last_user_message_in_stored_history = context_messages[-2]
+            if last_user_message_in_stored_history.get('role') == 'user':
+                if last_user_message_in_stored_history.get('content') == history_user_message.get('content'):
+                    add_to_history = False
+                    print("[CONTEXT] Input identical to previous user message in stored history. Skipping history update.")
+
+        if add_to_history:
+            current_assistant_message = {"role": "assistant", "content": response_text}
+            # Add to the full global history list (no limit applied here)
+            add_context_message(history_user_message)
+            add_context_message(current_assistant_message)
+            _save_context(hwnd) # Save the updated full history
+    # --- End Add to Stored History ---
+
+    # --- Cache the successful result ---
+    if not skip_cache and cache_file_path:
+        # Cache the parsed dictionary result, not the raw response
+        set_cache_translation(cache_key, final_translations, cache_file_path)
+        print(f"[CACHE] Translation cached/updated successfully in {cache_file_path.name}")
+    elif not skip_cache and not cache_file_path:
+        print("[CACHE] Warning: Could not cache translation (invalid path).")
+    # --- End Cache ---
+
+    return final_translations
+
+# --- END OF FILE utils/translation.py ---
+```
 
 --- START OF FILE app.py ---
-
 ```python
 # --- START OF FILE app.py ---
 
@@ -632,6 +1219,7 @@ from tkinter import ttk, messagebox
 import threading
 import time
 import cv2
+import numpy as np
 from PIL import Image, ImageTk
 import os
 import win32gui
@@ -981,10 +1569,10 @@ class VisualNovelTranslatorApp:
     def update_ocr_language(self, lang_code, engine_type):
         """Sets the desired OCR language and triggers engine re-initialization."""
         if lang_code == self.ocr_lang and self.ocr_engine_ready:
-             # Check if the current *engine* matches the requested one too
-             if engine_type == self.ocr_engine_type:
-                 print(f"OCR language already set to {lang_code} for engine {engine_type}.")
-                 return # No change needed if engine is ready and matches
+            # Check if the current *engine* matches the requested one too
+            if engine_type == self.ocr_engine_type:
+                print(f"OCR language already set to {lang_code} for engine {engine_type}.")
+                return # No change needed if engine is ready and matches
 
         print(f"Setting OCR language to: {lang_code} for engine {engine_type}")
         self.ocr_lang = lang_code
@@ -1028,7 +1616,7 @@ class VisualNovelTranslatorApp:
             self._trigger_ocr_initialization(self.ocr_engine_type, self.ocr_lang)
             messagebox.showinfo("OCR Not Ready", f"OCR ({self.ocr_engine_type}/{self.ocr_lang}) is initializing... Capture will start, but text extraction may be delayed.", parent=self.master)
         # else:
-            # print(f"OCR engine ({self.ocr_engine_type}/{self.ocr_lang}) is ready.")
+        # print(f"OCR engine ({self.ocr_engine_type}/{self.ocr_lang}) is ready.")
 
         # If currently viewing a snapshot, return to live view first
         if self.using_snapshot: self.return_to_live()
@@ -1369,9 +1957,9 @@ class VisualNovelTranslatorApp:
 
             # Check for OCR errors indicated by the function
             if extracted_text.startswith("[") and "Error]" in extracted_text:
-                 self.master.after_idle(lambda: self.update_status(f"Snip: {extracted_text}"))
-                 self.master.after_idle(lambda: self.display_snip_translation(extracted_text, screen_region))
-                 return
+                self.master.after_idle(lambda: self.update_status(f"Snip: {extracted_text}"))
+                self.master.after_idle(lambda: self.display_snip_translation(extracted_text, screen_region))
+                return
 
             if not extracted_text:
                 self.master.after_idle(lambda: self.update_status("Snip: No text found in region."))
@@ -1385,12 +1973,13 @@ class VisualNovelTranslatorApp:
                 self.master.after_idle(lambda: self.display_snip_translation("[Translation Config Error]", screen_region))
                 return
 
+            # Use a dictionary for snip translation input
             snip_tag_name = "_snip_translate"
-            aggregated_input_snip = f"[{snip_tag_name}]: {extracted_text}"
+            snip_input_dict = {snip_tag_name: extracted_text}
 
             print("[Snip Translate] Translating...")
             translation_result = translate_text(
-                aggregated_input_text=aggregated_input_snip,
+                stable_texts_dict=snip_input_dict, # Pass dictionary
                 hwnd=None, # No specific game window for snip cache/context
                 preset=config,
                 target_language=config["target_language"],
@@ -1520,9 +2109,9 @@ class VisualNovelTranslatorApp:
                 if self.rois and self.ocr_engine_ready:
                     self._process_rois(frame) # Pass only frame, engine details are instance vars
                 # elif not self.ocr_engine_ready:
-                    # Optional: Log that OCR is still initializing if needed
-                    # print("[Capture Loop] Waiting for OCR engine...")
-                    # pass
+                # Optional: Log that OCR is still initializing if needed
+                # print("[Capture Loop] Waiting for OCR engine...")
+                # pass
 
                 # --- Frame Display Timing ---
                 # Update display roughly at the target FPS
@@ -1720,14 +2309,16 @@ class VisualNovelTranslatorApp:
                 user_roi_names = {roi.name for roi in self.rois if roi.name != SNIP_ROI_NAME}
 
                 # Check if user ROIs exist AND if all of them are keys in the *new* stable_texts
-                all_rois_are_stable = bool(user_roi_names) and user_roi_names.issubset(self.stable_texts.keys())
+                # Also ensure stable_texts is not empty overall
+                all_rois_are_stable = bool(user_roi_names) and user_roi_names.issubset(self.stable_texts.keys()) and bool(self.stable_texts)
 
                 if all_rois_are_stable:
                     # All conditions met: Trigger translation
                     print("[Auto-Translate] All ROIs stable, triggering translation.")
+                    # Use after_idle to ensure it runs on the main thread
                     self.master.after_idle(self.translation_tab.perform_translation)
                 else:
-                    # Not all ROIs are stable, or no user ROIs exist.
+                    # Not all ROIs are stable, or no user ROIs exist, or stable_texts became empty.
                     # Check if the reason is that stable_texts became empty.
                     if not self.stable_texts: # If the stable text dictionary is now empty
                         print("[Auto-Translate] Stable text cleared, clearing overlays.")
@@ -1737,8 +2328,8 @@ class VisualNovelTranslatorApp:
                         if hasattr(self, "translation_tab"):
                             self.master.after_idle(lambda: self.translation_tab.update_translation_results({}, "[Waiting for stable text...]"))
                     # else:
-                        # Some ROIs might be stable, but not all. Do nothing.
-                        # print("[Auto-Translate] Waiting for all ROIs to stabilize.") # Optional log
+                    # Some ROIs might be stable, but not all. Do nothing.
+                    # print("[Auto-Translate] Waiting for all ROIs to stabilize.") # Optional log
             # --- End of Auto-Translate Logic ---
 
 
@@ -1842,9 +2433,9 @@ class VisualNovelTranslatorApp:
             self.roi_start_coords = None
             # If selection was active but failed, deactivate it
             if self.roi_selection_active:
-                 self.roi_selection_active = False
-                 if hasattr(self, "roi_tab"): self.roi_tab.on_roi_selection_toggled(False)
-                 if self.using_snapshot: self.return_to_live() # Exit snapshot if active
+                self.roi_selection_active = False
+                if hasattr(self, "roi_tab"): self.roi_tab.on_roi_selection_toggled(False)
+                if self.using_snapshot: self.return_to_live() # Exit snapshot if active
             return
 
         # Get final coordinates of the drawing rectangle
@@ -1879,7 +2470,8 @@ class VisualNovelTranslatorApp:
         existing_names = {r.name for r in self.rois if r.name != SNIP_ROI_NAME}
 
         if not roi_name: # Generate default name if empty
-            i = 1; roi_name = f"roi_{i}"
+            i = 1
+            roi_name = f"roi_{i}"
             while roi_name in existing_names: i += 1; roi_name = f"roi_{i}"
         elif roi_name in existing_names: # Check for overwrite
             if not messagebox.askyesno("ROI Exists", f"An ROI named '{roi_name}' already exists. Overwrite it?", parent=self.master):
@@ -1948,7 +2540,8 @@ class VisualNovelTranslatorApp:
             existing_names_now = {r.name for r in self.rois if r.name != SNIP_ROI_NAME}
             next_name = "dialogue" if "dialogue" not in existing_names_now else ""
             if not next_name: # Generate roi_N if dialogue exists
-                i = 1; next_name = f"roi_{i}"
+                i = 1
+                next_name = f"roi_{i}"
                 while next_name in existing_names_now: i += 1; next_name = f"roi_{i}"
             self.roi_tab.roi_name_entry.delete(0, tk.END)
             self.roi_tab.roi_name_entry.insert(0, next_name)
@@ -2056,35 +2649,3 @@ class VisualNovelTranslatorApp:
 
 # --- END OF FILE app.py ---
 ```
-
-**Summary of Changes:**
-
-1.  **`utils/settings.py`:** Added `ocr_engine` to `DEFAULT_SETTINGS`.
-2.  **`utils/ocr.py`:**
-    *   Major refactor.
-    *   Imports `easyocr`, `paddleocr`, and `winrt` components conditionally.
-    *   Adds language mapping dictionaries (`PADDLE_LANG_MAP`, `EASYOCR_LANG_MAP`, `WINDOWS_OCR_LANG_MAP`).
-    *   Uses global variables (`_paddle_ocr_instance`, etc.) for lazy initialization of engines.
-    *   Includes `_init_paddle`, `_init_easyocr`, `_init_windows_ocr` functions to handle engine loading, checking availability (for Windows OCR), and language mapping.
-    *   Uses a `threading.Lock` (`_init_lock`) to prevent race conditions during engine initialization.
-    *   Includes `_run_windows_ocr_async` helper using `asyncio` for Windows OCR.
-    *   The main `extract_text` function now acts as a dispatcher:
-        *   Takes `engine_type` as an argument.
-        *   Calls the appropriate `_init_...` function if needed (within the lock).
-        *   Calls the specific OCR method of the initialized engine.
-        *   Standardizes the output string format.
-        *   Includes basic error handling for initialization and runtime errors.
-3.  **`ui/capture_tab.py`:**
-    *   Added `OCR_ENGINES` list, conditionally including `"windows"`.
-    *   Added a `ttk.Combobox` (`engine_combo`) for selecting the engine.
-    *   Loads/saves the `ocr_engine` setting.
-    *   Added `on_engine_selected` handler to call `app.set_ocr_engine`.
-    *   Modified `on_language_changed` to also pass the *current engine* to `app.update_ocr_language`.
-4.  **`app.py`:**
-    *   Stores `ocr_engine_type` and `ocr_engine_ready` state.
-    *   Removed the old `self.ocr` instance variable and `OCR_ENGINE_LOCK`.
-    *   Added `_trigger_ocr_initialization` to handle engine loading in a background thread, updating `ocr_engine_ready` and status.
-    *   Added `set_ocr_engine` method called by the capture tab to change the engine type and trigger re-initialization.
-    *   Renamed `update_ocr_engine` to `update_ocr_language` for clarity, which now triggers re-initialization for the *current* engine type with the *new* language.
-    *   Modified `start_capture` and `start_snip_mode` to check `self.ocr_engine_ready` and show messages if initializing.
-    *   Modified `_process_rois` and `_process_snip_thread` to call the new `ocr.extract_text(..., lang=self.ocr_lang, engine_type=self.ocr_engine_type)`.

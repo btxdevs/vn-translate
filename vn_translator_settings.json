@@ -4,13 +4,13 @@
   "stable_threshold": 5,
   "max_display_width": 800,
   "max_display_height": 600,
-  "auto_translate": false,
+  "auto_translate": true,
   "ocr_language": "jpn",
-  "ocr_engine": "windows",
-  "global_overlays_enabled": false,
+  "ocr_engine": "easyocr",
+  "global_overlays_enabled": true,
   "overlay_settings": {
     "dialogue": {
-      "geometry": "827x122+640+790",
+      "geometry": "792x102+530+719",
       "enabled": true,
       "font_family": "Segoe UI",
       "font_size": 14,
@@ -24,7 +24,7 @@
       "geometry": "470x50+886+520"
     },
     "char": {
-      "geometry": "215x35+630+738",
+      "geometry": "215x35+524+664",
       "enabled": true,
       "font_family": "Segoe UI",
       "font_size": 14,

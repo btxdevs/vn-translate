@@ -305,8 +305,20 @@ class TranslationTab(BaseTab):
 
     def save_context_for_current_game(self, event=None):
         """Save the content of the context text widget for the current game."""
-        if event and event.keysym == 'Return' and not (event.state & 0x0001): pass
-        elif event and event.keysym == 'Return': return "break"
+        # Allow saving via Return unless Shift is held
+        if event and event.keysym == 'Return' and (event.state & 0x0001): # Shift key modifier
+            # Allow default Shift+Return behavior (insert newline)
+            return
+        elif event and event.keysym == 'Return':
+            # Prevent default Return behavior (newline insertion) and trigger save
+            pass # Handled below
+        elif event and event.type == tk.EventType.FocusOut:
+            # Trigger save on focus out
+            pass # Handled below
+        elif event:
+            # Ignore other events
+            return
+
         current_hwnd = self.app.selected_hwnd
         if not current_hwnd: return
         game_hash = _get_game_hash(current_hwnd)
@@ -323,27 +335,36 @@ class TranslationTab(BaseTab):
                 else: messagebox.showerror("Error", "Failed to save game-specific context.")
         except tk.TclError: print("Error accessing context text widget (might be destroyed).")
         except Exception as e: print(f"Error saving game context: {e}"); messagebox.showerror("Error", f"Failed to save game context: {e}")
-        if event and event.keysym == 'Return': return "break"
+
+        # Prevent newline insertion on regular Return press
+        if event and event.keysym == 'Return' and not (event.state & 0x0001):
+            return "break" # Stop the event propagation
 
     def save_basic_settings(self, event=None):
         """Save non-preset, non-game-specific settings like target language."""
         new_target_lang = self.target_lang_entry.get().strip()
-        settings_to_update = {}; changed = False
+        settings_to_update = {}
+        changed = False
         if new_target_lang != self.target_language:
             settings_to_update["target_language"] = new_target_lang
-            self.target_language = new_target_lang; changed = True
+            self.target_language = new_target_lang
+            changed = True
         if changed and settings_to_update:
             if update_settings(settings_to_update):
                 print("General translation settings (language) updated.")
                 self.app.update_status("Target language saved.")
             else: messagebox.showerror("Error", "Failed to save target language setting.")
+        # Prevent newline insertion if triggered by Return key
+        if event and event.keysym == 'Return':
+            return "break"
 
     def toggle_auto_translate(self):
         """Save the auto-translate setting."""
         self.auto_translate_enabled = self.auto_translate_var.get()
         if set_setting("auto_translate", self.auto_translate_enabled):
             status_msg = f"Auto-translate {'enabled' if self.auto_translate_enabled else 'disabled'}."
-            print(status_msg); self.app.update_status(status_msg)
+            print(status_msg)
+            self.app.update_status(status_msg)
             if self.app.floating_controls and self.app.floating_controls.winfo_exists():
                 self.app.floating_controls.auto_var.set(self.auto_translate_enabled)
         else: messagebox.showerror("Error", "Failed to save auto-translate setting.")
@@ -545,7 +566,14 @@ class TranslationTab(BaseTab):
             messagebox.showwarning("Warning", "No game window selected. Cannot translate.", parent=self.app.master)
             self.app.update_status("Translation cancelled: No window selected.")
             return
-        texts_to_translate = {name: text for name, text in self.app.stable_texts.items() if text and text.strip()}
+
+        # Get the stable texts dictionary directly
+        # Use a copy to avoid potential race conditions if app.stable_texts changes mid-thread
+        texts_to_translate = self.app.stable_texts.copy()
+        # Filter out empty texts *after* copying
+        texts_to_translate = {name: text for name, text in texts_to_translate.items() if text and text.strip()}
+
+
         if not texts_to_translate:
             print("No stable text available to translate.")
             self.app.update_status("No stable text to translate.")
@@ -559,7 +587,9 @@ class TranslationTab(BaseTab):
             if hasattr(self.app, 'overlay_manager'): self.app.overlay_manager.clear_all_overlays()
             return
 
-        aggregated_input_text = "\n".join([f"[{name}]: {text}" for name, text in texts_to_translate.items()])
+        # No longer need aggregated_input_text here
+        # aggregated_input_text = "\n".join([f"[{name}]: {text}" for name, text in texts_to_translate.items()])
+
         status_msg = "Translating..." if not force_recache else "Forcing retranslation..."
         self.app.update_status(status_msg)
         try:
@@ -572,10 +602,14 @@ class TranslationTab(BaseTab):
         if hasattr(self.app, 'overlay_manager'):
             for roi_name in texts_to_translate: self.app.overlay_manager.update_overlay(roi_name, "...")
 
+        # Keep a reference to the input dictionary for preview construction
+        input_texts_for_preview = texts_to_translate.copy()
+
         def translation_thread():
             try:
+                # Pass the dictionary directly
                 translated_segments = translate_text(
-                    aggregated_input_text=aggregated_input_text,
+                    stable_texts_dict=texts_to_translate, # Pass the filtered dictionary
                     hwnd=current_hwnd,
                     preset=config, # Preset no longer contains system_prompt from UI
                     target_language=config["target_language"],
@@ -596,20 +630,32 @@ class TranslationTab(BaseTab):
                 else:
                     print("Translation successful.")
                     preview_lines = []
-                    rois_to_iterate = self.app.rois if hasattr(self.app, 'rois') else []
-                    for roi in rois_to_iterate:
-                        roi_name = roi.name
-                        original_text = self.app.stable_texts.get(roi_name, "")
-                        translated_text = translated_segments.get(roi_name)
-                        if original_text.strip():
+                    # Use the original input dictionary keys for iteration order consistency
+                    # Sort keys for deterministic preview order
+                    sorted_roi_names = sorted(input_texts_for_preview.keys())
+
+                    for roi_name in sorted_roi_names:
+                        # Get original text from the input dictionary used for this translation call
+                        original_text = input_texts_for_preview.get(roi_name, "")
+                        translated_text = translated_segments.get(roi_name) # Get from result dict
+
+                        # We already filtered empty original_text, so this check might be redundant
+                        # but keep it for safety
+                        if original_text:
                             preview_lines.append(f"[{roi_name}]:")
+                            # Append the full translated text, preserving newlines
                             preview_lines.append(translated_text if translated_text else "[Translation N/A]")
-                            preview_lines.append("")
+                            preview_lines.append("") # Add blank line separator
+
+                    # Join lines for the final preview string
                     preview_text = "\n".join(preview_lines).strip()
+                    # Schedule UI update on main thread
                     self.app.master.after_idle(lambda seg=translated_segments, prev=preview_text: self.update_translation_results(seg, prev))
             except Exception as e:
                 error_msg = f"Unexpected error during translation thread: {str(e)}"
-                print(error_msg); import traceback; traceback.print_exc()
+                print(error_msg)
+                import traceback
+                traceback.print_exc()
                 self.app.master.after_idle(lambda: self.update_translation_display_error(error_msg))
                 if hasattr(self.app, 'overlay_manager'): self.app.master.after_idle(self.app.overlay_manager.clear_all_overlays)
 
@@ -623,19 +669,30 @@ class TranslationTab(BaseTab):
         """Force re-translation of the stable text, skipping cache check but updating cache."""
         self._start_translation_thread(force_recache=True)
 
+    # MODIFIED update_translation_results to add logging
     def update_translation_results(self, translated_segments, preview_text):
         """Update the preview display and overlays with translation results. Runs in main thread."""
         self.app.update_status("Translation complete.")
+        # print(f"[PREVIEW DEBUG] Updating display with text:\n{repr(preview_text)}") # Add repr() for debugging
         try:
             if self.translation_display.winfo_exists():
                 self.translation_display.config(state=tk.NORMAL)
                 self.translation_display.delete(1.0, tk.END)
-                self.translation_display.insert(tk.END, preview_text if preview_text else "[No translation received]")
+                # Ensure preview_text is a string before inserting
+                text_to_insert = preview_text if isinstance(preview_text, str) else "[Invalid Preview Format]"
+                self.translation_display.insert(tk.END, text_to_insert if text_to_insert else "[No translation received]")
                 self.translation_display.config(state=tk.DISABLED)
-        except tk.TclError: pass
+        except tk.TclError:
+            print("[PREVIEW DEBUG] TclError updating translation display (widget destroyed?).")
+            pass
+        except Exception as e:
+            print(f"[PREVIEW DEBUG] Error updating translation display: {e}")
+
         if hasattr(self.app, 'overlay_manager'): self.app.overlay_manager.update_overlays(translated_segments)
         self.last_translation_result = translated_segments
+        # Store the input that led to this result (use the app's current stable_texts)
         self.last_translation_input = self.app.stable_texts.copy()
+
 
     def update_translation_display_error(self, error_message):
         """Update the preview display with an error message. Runs in main thread."""
@@ -647,7 +704,8 @@ class TranslationTab(BaseTab):
                 self.translation_display.insert(tk.END, f"Translation Error:\n\n{error_message}")
                 self.translation_display.config(state=tk.DISABLED)
         except tk.TclError: pass
-        self.last_translation_result = None; self.last_translation_input = None
+        self.last_translation_result = None
+        self.last_translation_input = None
 
     def clear_all_translation_cache(self):
         """Clear ALL translation cache files and show confirmation."""
@@ -668,8 +726,16 @@ class TranslationTab(BaseTab):
     def reset_translation_context(self):
         """Reset the translation context history and delete the file for the current game."""
         current_hwnd = self.app.selected_hwnd
-        if messagebox.askyesno("Confirm Reset Context", "Are you sure you want to reset the translation context history for the current game?\n(This will delete the saved history file)", parent=self.app.master):
-            result = reset_context(current_hwnd)
+        # Check if hwnd is None (no window selected) - still allow reset but inform user
+        confirm_msg = "Are you sure you want to reset the translation context history"
+        if current_hwnd:
+            confirm_msg += " for the current game?\n(This will delete the saved history file)"
+        else:
+            confirm_msg += "?\n(No game window selected, cannot delete specific file)"
+        confirm_msg += "."
+
+        if messagebox.askyesno("Confirm Reset Context", confirm_msg, parent=self.app.master):
+            result = reset_context(current_hwnd) # Pass hwnd (even if None)
             messagebox.showinfo("Context Reset", result, parent=self.app.master)
             self.app.update_status("Translation context reset.")
 

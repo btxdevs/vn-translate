@@ -759,12 +759,13 @@ class VisualNovelTranslatorApp:
                 self.master.after_idle(lambda: self.display_snip_translation("[Translation Config Error]", screen_region))
                 return
 
+            # Use a dictionary for snip translation input
             snip_tag_name = "_snip_translate"
-            aggregated_input_snip = f"[{snip_tag_name}]: {extracted_text}"
+            snip_input_dict = {snip_tag_name: extracted_text}
 
             print("[Snip Translate] Translating...")
             translation_result = translate_text(
-                aggregated_input_text=aggregated_input_snip,
+                stable_texts_dict=snip_input_dict, # Pass dictionary
                 hwnd=None, # No specific game window for snip cache/context
                 preset=config,
                 target_language=config["target_language"],
@@ -1094,14 +1095,16 @@ class VisualNovelTranslatorApp:
                 user_roi_names = {roi.name for roi in self.rois if roi.name != SNIP_ROI_NAME}
 
                 # Check if user ROIs exist AND if all of them are keys in the *new* stable_texts
-                all_rois_are_stable = bool(user_roi_names) and user_roi_names.issubset(self.stable_texts.keys())
+                # Also ensure stable_texts is not empty overall
+                all_rois_are_stable = bool(user_roi_names) and user_roi_names.issubset(self.stable_texts.keys()) and bool(self.stable_texts)
 
                 if all_rois_are_stable:
                     # All conditions met: Trigger translation
                     print("[Auto-Translate] All ROIs stable, triggering translation.")
+                    # Use after_idle to ensure it runs on the main thread
                     self.master.after_idle(self.translation_tab.perform_translation)
                 else:
-                    # Not all ROIs are stable, or no user ROIs exist.
+                    # Not all ROIs are stable, or no user ROIs exist, or stable_texts became empty.
                     # Check if the reason is that stable_texts became empty.
                     if not self.stable_texts: # If the stable text dictionary is now empty
                         print("[Auto-Translate] Stable text cleared, clearing overlays.")
@@ -1253,7 +1256,8 @@ class VisualNovelTranslatorApp:
         existing_names = {r.name for r in self.rois if r.name != SNIP_ROI_NAME}
 
         if not roi_name: # Generate default name if empty
-            i = 1; roi_name = f"roi_{i}"
+            i = 1
+            roi_name = f"roi_{i}"
             while roi_name in existing_names: i += 1; roi_name = f"roi_{i}"
         elif roi_name in existing_names: # Check for overwrite
             if not messagebox.askyesno("ROI Exists", f"An ROI named '{roi_name}' already exists. Overwrite it?", parent=self.master):
@@ -1322,7 +1326,8 @@ class VisualNovelTranslatorApp:
             existing_names_now = {r.name for r in self.rois if r.name != SNIP_ROI_NAME}
             next_name = "dialogue" if "dialogue" not in existing_names_now else ""
             if not next_name: # Generate roi_N if dialogue exists
-                i = 1; next_name = f"roi_{i}"
+                i = 1
+                next_name = f"roi_{i}"
                 while next_name in existing_names_now: i += 1; next_name = f"roi_{i}"
             self.roi_tab.roi_name_entry.delete(0, tk.END)
             self.roi_tab.roi_name_entry.insert(0, next_name)

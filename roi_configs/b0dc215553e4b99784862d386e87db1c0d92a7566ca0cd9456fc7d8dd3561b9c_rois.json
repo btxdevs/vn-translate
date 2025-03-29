@@ -1,11 +1,11 @@
 [
   {
     "name": "char",
-    "x1": 255,
-    "y1": 547,
-    "x2": 465,
-    "y2": 574,
-    "color_filter_enabled": true,
+    "x1": 243,
+    "y1": 538,
+    "x2": 486,
+    "y2": 589,
+    "color_filter_enabled": false,
     "target_color": [
       0,
       0,
@@ -24,7 +24,7 @@
     "y1": 596,
     "x2": 1073,
     "y2": 705,
-    "color_filter_enabled": true,
+    "color_filter_enabled": false,
     "target_color": [
       0,
       0,

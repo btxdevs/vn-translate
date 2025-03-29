@@ -4,9 +4,10 @@
   "stable_threshold": 5,
   "max_display_width": 800,
   "max_display_height": 600,
-  "auto_translate": true,
+  "auto_translate": false,
   "ocr_language": "jpn",
-  "global_overlays_enabled": true,
+  "ocr_engine": "windows",
+  "global_overlays_enabled": false,
   "overlay_settings": {
     "dialogue": {
       "geometry": "827x122+640+790",

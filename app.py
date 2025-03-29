@@ -5,10 +5,11 @@ from tkinter import ttk, messagebox
 import threading
 import time
 import cv2
+import numpy as np
 from PIL import Image, ImageTk
 import os
 import win32gui
-from paddleocr import PaddleOCR
+
 
 # Utility Imports
 from utils.capture import get_window_title, capture_window, capture_screen_region
@@ -16,6 +17,7 @@ from utils.config import load_rois, ROI_CONFIGS_DIR, _get_game_hash # Use config
 from utils.settings import load_settings, set_setting, get_setting, get_overlay_config_for_roi
 from utils.roi import ROI
 from utils.translation import CACHE_DIR, CONTEXT_DIR, _load_context, translate_text
+import utils.ocr as ocr # Import the refactored ocr module
 
 # UI Imports
 from ui.capture_tab import CaptureTab
@@ -31,7 +33,7 @@ from ui.color_picker import ScreenColorPicker # Import screen color picker
 
 FPS = 10 # Target frames per second for capture loop
 FRAME_DELAY = 1.0 / FPS
-OCR_ENGINE_LOCK = threading.Lock()
+# OCR_ENGINE_LOCK = threading.Lock() # Removed - locking handled within ocr module if needed
 
 
 class VisualNovelTranslatorApp:
@@ -80,9 +82,12 @@ class VisualNovelTranslatorApp:
         self.max_display_height = get_setting("max_display_height", 600) # Max height for canvas image
         self.last_status_message = ""
 
-        # OCR Engine
-        self.ocr = None
+        # OCR Engine State
+        self.ocr_engine_type = get_setting("ocr_engine", "paddle") # Store the selected type
         self.ocr_lang = get_setting("ocr_language", "jpn")
+        self.ocr_engine_ready = False # Flag to track if the current engine is ready
+        self._ocr_init_thread = None # Thread for background initialization
+
         self._resize_job = None # For debouncing canvas resize events
 
         # Setup UI components
@@ -90,9 +95,8 @@ class VisualNovelTranslatorApp:
         self.overlay_manager = OverlayManager(self.master, self)
         self.floating_controls = None
 
-        # Initialize OCR engine and show controls
-        initial_ocr_lang = self.ocr_lang or "jpn"
-        self.update_ocr_engine(initial_ocr_lang, initial_load=True)
+        # Initialize OCR engine (now happens in background)
+        self._trigger_ocr_initialization(self.ocr_engine_type, self.ocr_lang, initial_load=True)
         self.show_floating_controls() # Show floating controls on startup
 
     def _ensure_dirs(self):
@@ -300,50 +304,68 @@ class VisualNovelTranslatorApp:
         if hasattr(self, "overlay_manager"):
             self.overlay_manager.clear_all_overlays()
 
-    def update_ocr_engine(self, lang_code, initial_load=False):
-        """Initializes or updates the OCR engine in a separate thread."""
-        def init_engine():
-            global OCR_ENGINE_LOCK
-            # Mapping for PaddleOCR language codes
-            lang_map = {
-                "jpn": "japan", "jpn_vert": "japan", "eng": "en",
-                "chi_sim": "ch", "chi_tra": "ch", "kor": "ko",
-            }
-            ocr_lang_paddle = lang_map.get(lang_code, "en") # Default to English
+    def _trigger_ocr_initialization(self, engine_type, lang_code, initial_load=False):
+        """Starts the OCR engine initialization in a background thread."""
+        # Abort if an init thread is already running
+        if self._ocr_init_thread and self._ocr_init_thread.is_alive():
+            print("[OCR Init] Initialization already in progress. Ignoring new request.")
+            return
 
-            # Check if engine exists and language matches
-            with OCR_ENGINE_LOCK:
-                current_paddle_lang = getattr(self.ocr, "lang", None) if self.ocr else None
-                if current_paddle_lang == ocr_lang_paddle and self.ocr is not None:
-                    if not initial_load: print(f"OCR engine already initialized with {lang_code}.")
-                    self.master.after_idle(lambda: self.update_status(f"OCR Ready ({lang_code})."))
-                    return # No change needed
+        self.ocr_engine_ready = False # Mark as not ready until init completes
+        status_msg = f"Initializing OCR ({engine_type}/{lang_code})..."
+        if not initial_load:
+            print(status_msg)
+        self.update_status(status_msg)
 
-            # Update status before potentially long initialization
-            status_msg = f"Initializing OCR ({lang_code})..."
-            if not initial_load: print(status_msg)
-            self.master.after_idle(lambda: self.update_status(status_msg))
-
+        def init_task():
             try:
-                # Initialize PaddleOCR (this can take time)
-                new_ocr_engine = PaddleOCR(use_angle_cls=True, lang=ocr_lang_paddle, show_log=False)
-                # Safely update the instance variable
-                with OCR_ENGINE_LOCK:
-                    self.ocr = new_ocr_engine
-                    self.ocr_lang = lang_code # Store the requested code (e.g., 'jpn_vert')
-                print(f"OCR engine ready for {lang_code}.")
-                self.master.after_idle(lambda: self.update_status(f"OCR Ready ({lang_code})."))
+                # Call the extract_text function with a dummy image just to trigger initialization
+                # This relies on the caching/initialization logic within ocr.py
+                dummy_img = np.zeros((10, 10, 3), dtype=np.uint8) # Small dummy image
+                ocr.extract_text(dummy_img, lang=lang_code, engine_type=engine_type)
+                # If no exception, initialization was successful (or already done)
+                self.ocr_engine_ready = True
+                success_msg = f"OCR Ready ({engine_type}/{lang_code})."
+                print(success_msg)
+                self.master.after_idle(lambda: self.update_status(success_msg))
             except Exception as e:
-                print(f"!!! Error initializing PaddleOCR for lang {lang_code}: {e}")
-                import traceback
-                traceback.print_exc()
-                self.master.after_idle(lambda: self.update_status(f"OCR Error ({lang_code}): Check console"))
-                # Ensure ocr is None on failure
-                with OCR_ENGINE_LOCK:
-                    self.ocr = None
+                self.ocr_engine_ready = False
+                error_msg = f"OCR Error ({engine_type}/{lang_code}): {str(e)[:60]}..."
+                print(f"!!! Error during OCR initialization thread: {e}")
+                # import traceback # Optional: uncomment for full trace
+                # traceback.print_exc()
+                self.master.after_idle(lambda: self.update_status(error_msg))
 
-        # Start initialization in a background thread to avoid freezing the UI
-        threading.Thread(target=init_engine, daemon=True).start()
+        self._ocr_init_thread = threading.Thread(target=init_task, daemon=True)
+        self._ocr_init_thread.start()
+
+    def set_ocr_engine(self, engine_type, lang_code):
+        """Sets the desired OCR engine and triggers initialization."""
+        if engine_type == self.ocr_engine_type:
+            print(f"OCR engine already set to {engine_type}.")
+            # Still might need re-init if language changed implicitly, trigger anyway
+            self._trigger_ocr_initialization(engine_type, lang_code)
+            return
+
+        print(f"Setting OCR engine to: {engine_type}")
+        self.ocr_engine_type = engine_type
+        set_setting("ocr_engine", engine_type) # Save preference
+        self._trigger_ocr_initialization(engine_type, lang_code)
+
+    def update_ocr_language(self, lang_code, engine_type):
+        """Sets the desired OCR language and triggers engine re-initialization."""
+        if lang_code == self.ocr_lang and self.ocr_engine_ready:
+            # Check if the current *engine* matches the requested one too
+            if engine_type == self.ocr_engine_type:
+                print(f"OCR language already set to {lang_code} for engine {engine_type}.")
+                return # No change needed if engine is ready and matches
+
+        print(f"Setting OCR language to: {lang_code} for engine {engine_type}")
+        self.ocr_lang = lang_code
+        set_setting("ocr_language", lang_code) # Save preference
+        # Always trigger re-initialization when language changes, using the current engine type
+        self._trigger_ocr_initialization(engine_type, lang_code)
+
 
     def update_stable_threshold(self, new_value):
         """Updates the stability threshold from UI controls."""
@@ -375,11 +397,12 @@ class VisualNovelTranslatorApp:
             self.load_rois_for_hwnd(self.selected_hwnd)
 
         # Check if OCR engine is ready
-        with OCR_ENGINE_LOCK: ocr_ready = bool(self.ocr)
-        if not ocr_ready:
-            current_lang = self.ocr_lang or "jpn"
-            self.update_ocr_engine(current_lang) # Trigger initialization if not ready
-            messagebox.showinfo("OCR Not Ready", "OCR is initializing... Capture will start, but text extraction may be delayed.", parent=self.master)
+        if not self.ocr_engine_ready:
+            # If not ready, trigger initialization again and inform user
+            self._trigger_ocr_initialization(self.ocr_engine_type, self.ocr_lang)
+            messagebox.showinfo("OCR Not Ready", f"OCR ({self.ocr_engine_type}/{self.ocr_lang}) is initializing... Capture will start, but text extraction may be delayed.", parent=self.master)
+        # else:
+        # print(f"OCR engine ({self.ocr_engine_type}/{self.ocr_lang}) is ready.")
 
         # If currently viewing a snapshot, return to live view first
         if self.using_snapshot: self.return_to_live()
@@ -536,10 +559,11 @@ class VisualNovelTranslatorApp:
             return
 
         # Check OCR readiness
-        with OCR_ENGINE_LOCK:
-            if not self.ocr:
-                messagebox.showwarning("OCR Not Ready", "OCR engine not initialized. Cannot use Snip & Translate.", parent=self.master)
-                return
+        if not self.ocr_engine_ready:
+            messagebox.showwarning("OCR Not Ready", f"OCR engine ({self.ocr_engine_type}/{self.ocr_lang}) not initialized. Cannot use Snip & Translate.", parent=self.master)
+            # Optionally trigger initialization again
+            # self._trigger_ocr_initialization(self.ocr_engine_type, self.ocr_lang)
+            return
 
         print("Starting Snip & Translate mode...")
         self.snip_mode_active = True
@@ -707,32 +731,21 @@ class VisualNovelTranslatorApp:
                 self.master.after_idle(lambda: self.update_status("Snip Error: Failed to capture region."))
                 return
 
-            # 2. Perform OCR
-            with OCR_ENGINE_LOCK: ocr_engine_instance = self.ocr
-            if not ocr_engine_instance:
-                self.master.after_idle(lambda: self.update_status("Snip Error: OCR engine not ready."))
+            # 2. Perform OCR (using the currently selected engine and language)
+            if not self.ocr_engine_ready:
+                self.master.after_idle(lambda: self.update_status(f"Snip Error: OCR ({self.ocr_engine_type}/{self.ocr_lang}) not ready."))
                 return
 
-            print("[Snip OCR] Running OCR...")
-            img_to_ocr = img_bgr # Use original captured image for snip (no filtering applied here)
-            ocr_result_raw = ocr_engine_instance.ocr(img_to_ocr, cls=True)
-
-            # Extract text from OCR result
-            text_lines = []
-            if ocr_result_raw and isinstance(ocr_result_raw, list) and len(ocr_result_raw) > 0:
-                current_result_set = ocr_result_raw[0] if isinstance(ocr_result_raw[0], list) else ocr_result_raw
-                if current_result_set:
-                    for item in current_result_set:
-                        text_info = None
-                        if isinstance(item, list) and len(item) >= 2 and isinstance(item[1], (list, tuple)):
-                            text_info = item[1]
-                        elif isinstance(item, tuple) and len(item) >= 2:
-                            text_info = item
-                        if isinstance(text_info, (tuple, list)) and len(text_info) >= 1 and text_info[0]:
-                            text_lines.append(str(text_info[0]))
-
-            extracted_text = " ".join(text_lines).strip()
+            print(f"[Snip OCR] Running OCR ({self.ocr_engine_type}/{self.ocr_lang})...")
+            # Pass engine type and language to the unified extract_text function
+            extracted_text = ocr.extract_text(img_bgr, lang=self.ocr_lang, engine_type=self.ocr_engine_type)
             print(f"[Snip OCR] Extracted: '{extracted_text}'")
+
+            # Check for OCR errors indicated by the function
+            if extracted_text.startswith("[") and "Error]" in extracted_text:
+                self.master.after_idle(lambda: self.update_status(f"Snip: {extracted_text}"))
+                self.master.after_idle(lambda: self.display_snip_translation(extracted_text, screen_region))
+                return
 
             if not extracted_text:
                 self.master.after_idle(lambda: self.update_status("Snip: No text found in region."))
@@ -752,13 +765,13 @@ class VisualNovelTranslatorApp:
             print("[Snip Translate] Translating...")
             translation_result = translate_text(
                 aggregated_input_text=aggregated_input_snip,
-                hwnd=None,
+                hwnd=None, # No specific game window for snip cache/context
                 preset=config,
                 target_language=config["target_language"],
                 additional_context=config["additional_context"],
-                context_limit=0,
-                skip_cache=True,
-                skip_history=True,
+                context_limit=0, # No context history for snips
+                skip_cache=True, # Don't cache snips
+                skip_history=True, # Don't add snips to history
             )
 
             # 4. Process translation result
@@ -768,7 +781,7 @@ class VisualNovelTranslatorApp:
                     final_text = f"Error: {translation_result['error']}"
                 elif snip_tag_name in translation_result:
                     final_text = translation_result[snip_tag_name]
-                elif len(translation_result) == 1:
+                elif len(translation_result) == 1: # Handle case where tag might be missing but only one result
                     final_text = next(iter(translation_result.values()), "[Parsing Failed]")
 
             print(f"[Snip Translate] Result: '{final_text}'")
@@ -785,42 +798,58 @@ class VisualNovelTranslatorApp:
 
     def display_snip_translation(self, text, region):
         """Creates or updates the floating window for snip results."""
+        # Close existing snip window if open
         if self.current_snip_window and self.current_snip_window.winfo_exists():
             try: self.current_snip_window.destroy_window()
             except tk.TclError: pass
         self.current_snip_window = None
 
         try:
+            # Get the specific configuration for the snip window
             snip_config = get_overlay_config_for_roi(SNIP_ROI_NAME)
-            snip_config["enabled"] = True
+            snip_config["enabled"] = True # Snip window is always enabled when created
 
+            # Create the closable overlay window
             self.current_snip_window = ClosableFloatingOverlayWindow(
                 self.master,
-                roi_name=SNIP_ROI_NAME,
+                roi_name=SNIP_ROI_NAME, # Use the special name
                 initial_config=snip_config,
-                manager_ref=None
+                manager_ref=None # Snip window is independent of the manager
             )
 
+            # --- Position the snip window intelligently ---
+            # Default position: to the right of the snipped region
             pos_x = region["left"] + region["width"] + 10
             pos_y = region["top"]
-            self.current_snip_window.update_idletasks()
+
+            # Ensure window is fully visible on screen
+            self.current_snip_window.update_idletasks() # Ensure dimensions are calculated
             win_width = self.current_snip_window.winfo_width()
             win_height = self.current_snip_window.winfo_height()
             screen_width = self.master.winfo_screenwidth()
             screen_height = self.master.winfo_screenheight()
 
-            if pos_x + win_width > screen_width: pos_x = region["left"] - win_width - 10
-            if pos_y + win_height > screen_height: pos_y = screen_height - win_height - 10
+            # Adjust if it goes off-screen right
+            if pos_x + win_width > screen_width:
+                pos_x = region["left"] - win_width - 10 # Try left
+            # Adjust if it goes off-screen bottom
+            if pos_y + win_height > screen_height:
+                pos_y = screen_height - win_height - 10 # Move up
+            # Ensure it doesn't go off-screen top or left
             pos_x = max(0, pos_x)
             pos_y = max(0, pos_y)
 
+            # Apply the calculated position
             self.current_snip_window.geometry(f"+{pos_x}+{pos_y}")
-            self.current_snip_window.update_text(text, global_overlays_enabled=True)
+
+            # Update the text and ensure it's visible
+            self.current_snip_window.update_text(text, global_overlays_enabled=True) # Force show
 
         except Exception as e:
             print(f"Error creating snip result window: {e}")
             import traceback
             traceback.print_exc()
+            # Clean up partially created window if error occurred
             if self.current_snip_window:
                 try: self.current_snip_window.destroy_window()
                 except Exception: pass
@@ -838,137 +867,172 @@ class VisualNovelTranslatorApp:
             frame_to_display = None
 
             try:
+                # If in snapshot mode, just sleep briefly and continue
                 if self.using_snapshot:
-                    time.sleep(0.05)
+                    time.sleep(0.05) # Short sleep to prevent busy-waiting
                     continue
 
+                # Check if the target window is still valid
                 if not self.selected_hwnd or not win32gui.IsWindow(self.selected_hwnd):
                     print("Capture target window lost or invalid. Stopping.")
                     self.master.after_idle(self.handle_capture_failure)
-                    break
+                    break # Exit the loop
 
+                # Capture the window content
                 frame = capture_window(self.selected_hwnd)
                 if frame is None:
+                    # Handle capture failure (e.g., window minimized, protected content)
                     print("Warning: capture_window returned None. Retrying...")
-                    time.sleep(0.5)
+                    time.sleep(0.5) # Wait a bit longer before retrying
                     continue
 
+                # Store the latest frame
                 self.current_frame = frame
-                frame_to_display = frame
+                frame_to_display = frame # Use this frame for display update
 
-                with OCR_ENGINE_LOCK: ocr_engine_instance = self.ocr
-                if self.rois and ocr_engine_instance:
-                    self._process_rois(frame, ocr_engine_instance)
+                # Process ROIs if OCR is ready and ROIs exist
+                if self.rois and self.ocr_engine_ready:
+                    self._process_rois(frame) # Pass only frame, engine details are instance vars
+                # elif not self.ocr_engine_ready:
+                # Optional: Log that OCR is still initializing if needed
+                # print("[Capture Loop] Waiting for OCR engine...")
+                # pass
 
+                # --- Frame Display Timing ---
+                # Update display roughly at the target FPS
                 current_time = time.time()
                 if current_time - last_frame_time >= target_sleep_time:
                     if frame_to_display is not None:
+                        # Send a copy to the main thread for display
                         frame_copy = frame_to_display.copy()
                         self.master.after_idle(lambda f=frame_copy: self._display_frame(f))
                     last_frame_time = current_time
 
+                # --- Loop Delay Calculation ---
                 elapsed = time.time() - loop_start_time
-                sleep_duration = max(0.001, target_sleep_time - elapsed)
+                sleep_duration = max(0.001, target_sleep_time - elapsed) # Ensure positive sleep
                 time.sleep(sleep_duration)
 
             except Exception as e:
                 print(f"!!! Error in capture loop: {e}")
                 import traceback
                 traceback.print_exc()
+                # Update status bar from main thread
                 self.master.after_idle(lambda msg=str(e): self.update_status(f"Capture loop error: {msg[:60]}..."))
-                time.sleep(1)
+                time.sleep(1) # Pause briefly after an error
 
         print("Capture thread finished or exited.")
 
     def handle_capture_failure(self):
         """Called from main thread if capture loop detects window loss."""
-        if self.capturing:
+        if self.capturing: # Only act if we thought we were capturing
             self.update_status("Window lost or uncapturable. Stopping capture.")
             print("Capture target window became invalid.")
-            self.stop_capture()
+            self.stop_capture() # Initiate the stop sequence
 
     def on_canvas_resize(self, event=None):
         """Handles canvas resize events, debouncing redraw."""
         if self._resize_job:
             self.master.after_cancel(self._resize_job)
+        # Schedule the actual redraw after a short delay
         self._resize_job = self.master.after(100, self._perform_resize_redraw)
 
     def _perform_resize_redraw(self):
         """Redraws the frame on the canvas after resizing."""
-        self._resize_job = None
-        if not self.canvas.winfo_exists(): return
+        self._resize_job = None # Reset the job ID
+        if not self.canvas.winfo_exists(): return # Check if canvas still exists
 
+        # Determine which frame to display (snapshot or live)
         frame = self.snapshot_frame if self.using_snapshot else self.current_frame
-        self._display_frame(frame)
+        self._display_frame(frame) # Call the display function
 
     def _display_frame(self, frame):
         """Displays the given frame (NumPy array) on the canvas."""
         if not hasattr(self, "canvas") or not self.canvas.winfo_exists(): return
 
+        # Clear previous content
         self.canvas.delete("display_content")
-        self.display_frame_tk = None
+        self.display_frame_tk = None # Release previous PhotoImage reference
 
+        # Handle case where frame is None (e.g., before capture starts)
         if frame is None:
             try:
                 cw, ch = self.canvas.winfo_width(), self.canvas.winfo_height()
-                if cw > 1 and ch > 1:
+                if cw > 1 and ch > 1: # Ensure canvas has valid dimensions
                     self.canvas.create_text(
                         cw / 2, ch / 2,
                         text="No Image\n(Select Window & Start Capture)",
                         fill="gray50", tags="display_content", justify=tk.CENTER
                     )
-            except Exception: pass
+            except Exception: pass # Ignore errors during placeholder text creation
             return
 
         try:
             fh, fw = frame.shape[:2]
             cw, ch = self.canvas.winfo_width(), self.canvas.winfo_height()
+
+            # Check for invalid dimensions
             if fw <= 0 or fh <= 0 or cw <= 1 or ch <= 1: return
 
+            # Calculate scaling factor to fit frame within canvas
             scale = min(cw / fw, ch / fh)
             nw, nh = int(fw * scale), int(fh * scale)
+
+            # Check for invalid scaled dimensions
             if nw < 1 or nh < 1: return
 
+            # Store scaling and position info
             self.scale_x, self.scale_y = scale, scale
             self.frame_display_coords = {
-                "x": (cw - nw) // 2, "y": (ch - nh) // 2,
+                "x": (cw - nw) // 2, "y": (ch - nh) // 2, # Center the image
                 "w": nw, "h": nh
             }
 
+            # Resize image using OpenCV (linear interpolation is usually good enough)
             resized = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
+            # Convert BGR (OpenCV) to RGB (PIL)
             img = Image.fromarray(cv2.cvtColor(resized, cv2.COLOR_BGR2RGB))
+            # Convert PIL image to Tkinter PhotoImage
             self.display_frame_tk = ImageTk.PhotoImage(image=img)
 
+            # Display the image on the canvas
             self.canvas.create_image(
                 self.frame_display_coords["x"], self.frame_display_coords["y"],
                 anchor=tk.NW, image=self.display_frame_tk,
-                tags=("display_content", "frame_image")
+                tags=("display_content", "frame_image") # Add tags for easy deletion/identification
             )
+
+            # Draw ROI rectangles on top
             self._draw_rois()
 
         except Exception as e:
             print(f"Error displaying frame: {e}")
+            # Attempt to display error message on canvas
             try:
                 cw, ch = self.canvas.winfo_width(), self.canvas.winfo_height()
                 self.canvas.create_text(cw/2, ch/2, text=f"Display Error:\n{e}", fill="red", tags="display_content")
-            except: pass
+            except: pass # Ignore errors during error display
 
-    def _process_rois(self, frame, ocr_engine):
+    def _process_rois(self, frame):
         """Extracts text from ROIs, checks stability, and triggers translation."""
-        if frame is None or ocr_engine is None: return
+        # No need to pass ocr_engine, use self.ocr_engine_type and self.ocr_lang
+        if frame is None or not self.ocr_engine_ready:
+            # print("_process_rois skipped: No frame or OCR not ready.")
+            return
 
         extracted = {}
         stable_changed = False
         new_stable = self.stable_texts.copy()
 
         for roi in self.rois:
-            if roi.name == SNIP_ROI_NAME: continue
+            if roi.name == SNIP_ROI_NAME: continue # Skip the special snip ROI
 
             roi_img_original = roi.extract_roi(frame)
             roi_img_processed = roi.apply_color_filter(roi_img_original) # Apply filter
 
             if roi_img_processed is None or roi_img_processed.size == 0:
                 extracted[roi.name] = ""
+                # Reset history and stability if ROI becomes invalid
                 if roi.name in self.text_history: del self.text_history[roi.name]
                 if roi.name in new_stable:
                     del new_stable[roi.name]
@@ -976,23 +1040,11 @@ class VisualNovelTranslatorApp:
                 continue
 
             try:
-                ocr_result_raw = ocr_engine.ocr(roi_img_processed, cls=True) # OCR the processed image
-                text_lines = []
-                if ocr_result_raw and isinstance(ocr_result_raw, list) and len(ocr_result_raw) > 0:
-                    current_result_set = ocr_result_raw[0] if isinstance(ocr_result_raw[0], list) else ocr_result_raw
-                    if current_result_set:
-                        for item in current_result_set:
-                            text_info = None
-                            if isinstance(item, list) and len(item) >= 2 and isinstance(item[1], (list, tuple)):
-                                text_info = item[1]
-                            elif isinstance(item, tuple) and len(item) >= 2:
-                                text_info = item
-                            if isinstance(text_info, (tuple, list)) and len(text_info) >= 1 and text_info[0]:
-                                text_lines.append(str(text_info[0]))
-
-                text = " ".join(text_lines).strip()
+                # Call the unified OCR function from utils.ocr
+                text = ocr.extract_text(roi_img_processed, lang=self.ocr_lang, engine_type=self.ocr_engine_type)
                 extracted[roi.name] = text
 
+                # --- Stability Check ---
                 history = self.text_history.get(roi.name, {"text": "", "count": 0})
                 if text == history["text"]:
                     history["count"] += 1
@@ -1005,15 +1057,19 @@ class VisualNovelTranslatorApp:
                 current_stable_text = self.stable_texts.get(roi.name)
 
                 if is_now_stable:
+                    # Mark as stable if threshold met and text is different from previous stable text
                     if not was_stable or current_stable_text != text:
                         new_stable[roi.name] = text
                         stable_changed = True
                 elif was_stable:
+                    # If it was stable but no longer meets threshold (text changed), remove it
                     if roi.name in new_stable:
                         del new_stable[roi.name]
                         stable_changed = True
+                # --- End Stability Check ---
 
             except Exception as e:
+                # Handle errors during OCR for a specific ROI
                 print(f"!!! OCR Error for ROI {roi.name}: {e}")
                 extracted[roi.name] = "[OCR Error]"
                 self.text_history[roi.name] = {"text": "[OCR Error]", "count": 1}
@@ -1021,21 +1077,23 @@ class VisualNovelTranslatorApp:
                     del new_stable[roi.name]
                     stable_changed = True
 
-        # --- Update UI and Trigger Translation ---
+        # --- Update UI and Trigger Translation (Scheduled on Main Thread) ---
         if hasattr(self, "text_tab") and self.text_tab.frame.winfo_exists():
+            # Update the "Live Text" tab
             self.master.after_idle(lambda et=extracted.copy(): self.text_tab.update_text(et))
 
         if stable_changed:
             self.stable_texts = new_stable
             if hasattr(self, "stable_text_tab") and self.stable_text_tab.frame.winfo_exists():
+                # Update the "Stable Text" tab
                 self.master.after_idle(lambda st=self.stable_texts.copy(): self.stable_text_tab.update_text(st))
 
-            # --- MODIFIED Auto-Translate Trigger Logic ---
+            # --- Auto-Translate Trigger Logic ---
             if hasattr(self, "translation_tab") and self.translation_tab.frame.winfo_exists() and self.translation_tab.is_auto_translate_enabled():
-                # Get all user-defined ROI names
+                # Get all user-defined ROI names (excluding the snip one)
                 user_roi_names = {roi.name for roi in self.rois if roi.name != SNIP_ROI_NAME}
 
-                # Check if user ROIs exist AND if all of them are keys in stable_texts
+                # Check if user ROIs exist AND if all of them are keys in the *new* stable_texts
                 all_rois_are_stable = bool(user_roi_names) and user_roi_names.issubset(self.stable_texts.keys())
 
                 if all_rois_are_stable:
@@ -1049,12 +1107,13 @@ class VisualNovelTranslatorApp:
                         print("[Auto-Translate] Stable text cleared, clearing overlays.")
                         if hasattr(self, "overlay_manager"):
                             self.master.after_idle(self.overlay_manager.clear_all_overlays)
+                        # Also clear the translation preview
                         if hasattr(self, "translation_tab"):
                             self.master.after_idle(lambda: self.translation_tab.update_translation_results({}, "[Waiting for stable text...]"))
                     # else:
                     # Some ROIs might be stable, but not all. Do nothing.
                     # print("[Auto-Translate] Waiting for all ROIs to stabilize.") # Optional log
-            # --- End of MODIFIED Logic ---
+            # --- End of Auto-Translate Logic ---
 
 
     def _draw_rois(self):
@@ -1063,26 +1122,30 @@ class VisualNovelTranslatorApp:
             return
 
         ox, oy = self.frame_display_coords["x"], self.frame_display_coords["y"]
+        # Clear only ROI drawings, not the frame image
         self.canvas.delete("roi_drawing")
 
         for i, roi in enumerate(self.rois):
-            if roi.name == SNIP_ROI_NAME: continue
+            if roi.name == SNIP_ROI_NAME: continue # Don't draw the snip ROI
 
             try:
+                # Calculate display coordinates based on scaling and offset
                 dx1 = int(roi.x1 * self.scale_x) + ox
                 dy1 = int(roi.y1 * self.scale_y) + oy
                 dx2 = int(roi.x2 * self.scale_x) + ox
                 dy2 = int(roi.y2 * self.scale_y) + oy
 
+                # Draw rectangle
                 self.canvas.create_rectangle(
                     dx1, dy1, dx2, dy2,
-                    outline="lime", width=1,
-                    tags=("display_content", "roi_drawing", f"roi_{i}")
+                    outline="lime", width=1, # Lime green outline
+                    tags=("display_content", "roi_drawing", f"roi_{i}") # Add tags
                 )
+                # Draw label
                 self.canvas.create_text(
-                    dx1 + 3, dy1 + 1,
+                    dx1 + 3, dy1 + 1, # Position slightly inside top-left corner
                     text=roi.name, fill="lime", anchor=tk.NW,
-                    font=("TkDefaultFont", 8),
+                    font=("TkDefaultFont", 8), # Small font
                     tags=("display_content", "roi_drawing", f"roi_label_{i}")
                 )
             except Exception as e:
@@ -1092,11 +1155,14 @@ class VisualNovelTranslatorApp:
 
     def on_mouse_down(self, event):
         """Handles mouse button press on the canvas (for ROI definition)."""
+        # Only active during ROI definition AND when using a snapshot
         if not self.roi_selection_active or not self.using_snapshot: return
 
+        # Check if click is within the displayed image bounds
         img_x, img_y = self.frame_display_coords["x"], self.frame_display_coords["y"]
         img_w, img_h = self.frame_display_coords["w"], self.frame_display_coords["h"]
         if not (img_x <= event.x < img_x + img_w and img_y <= event.y < img_y + img_h):
+            # Click outside image, cancel drawing
             self.roi_start_coords = None
             if self.roi_draw_rect_id:
                 try: self.canvas.delete(self.roi_draw_rect_id)
@@ -1104,13 +1170,16 @@ class VisualNovelTranslatorApp:
             self.roi_draw_rect_id = None
             return
 
+        # Record start coordinates (canvas coords)
         self.roi_start_coords = (event.x, event.y)
+        # Delete previous drawing rectangle if it exists
         if self.roi_draw_rect_id:
             try: self.canvas.delete(self.roi_draw_rect_id)
             except tk.TclError: pass
+        # Create new rectangle starting and ending at the click point
         self.roi_draw_rect_id = self.canvas.create_rectangle(
             event.x, event.y, event.x, event.y,
-            outline="red", width=2, tags="roi_drawing"
+            outline="red", width=2, tags="roi_drawing" # Red outline for drawing
         )
 
     def on_mouse_drag(self, event):
@@ -1118,124 +1187,151 @@ class VisualNovelTranslatorApp:
         if not self.roi_selection_active or not self.roi_start_coords or not self.roi_draw_rect_id: return
 
         sx, sy = self.roi_start_coords
+        # Clamp current coordinates to be within the image bounds on canvas
         img_x, img_y = self.frame_display_coords["x"], self.frame_display_coords["y"]
         img_w, img_h = self.frame_display_coords["w"], self.frame_display_coords["h"]
         cx = max(img_x, min(event.x, img_x + img_w))
         cy = max(img_y, min(event.y, img_y + img_h))
 
         try:
+            # Also clamp start coordinates just in case they were slightly off
             clamped_sx = max(img_x, min(sx, img_x + img_w))
             clamped_sy = max(img_y, min(sy, img_y + img_h))
+            # Update the drawing rectangle coordinates
             self.canvas.coords(self.roi_draw_rect_id, clamped_sx, clamped_sy, cx, cy)
         except tk.TclError:
+            # Handle error if canvas/rectangle destroyed unexpectedly
             self.roi_draw_rect_id = None
             self.roi_start_coords = None
 
     def on_mouse_up(self, event):
         """Handles mouse button release on the canvas (completes ROI definition)."""
+        # Check if ROI definition was active and started correctly
         if not self.roi_selection_active or not self.roi_start_coords or not self.roi_draw_rect_id:
+            # Clean up potential dangling rectangle if drag never happened
             if self.roi_draw_rect_id:
                 try: self.canvas.delete(self.roi_draw_rect_id)
                 except tk.TclError: pass
             self.roi_draw_rect_id = None
             self.roi_start_coords = None
+            # If selection was active but failed, deactivate it
+            if self.roi_selection_active:
+                self.roi_selection_active = False
+                if hasattr(self, "roi_tab"): self.roi_tab.on_roi_selection_toggled(False)
+                if self.using_snapshot: self.return_to_live() # Exit snapshot if active
             return
 
+        # Get final coordinates of the drawing rectangle
         try: coords = self.canvas.coords(self.roi_draw_rect_id)
-        except tk.TclError: coords = None
+        except tk.TclError: coords = None # Handle error if widget destroyed
 
+        # Clean up drawing rectangle and reset state *before* processing ROI
         if self.roi_draw_rect_id:
             try: self.canvas.delete(self.roi_draw_rect_id)
             except tk.TclError: pass
         self.roi_draw_rect_id = None
         self.roi_start_coords = None
-        self.roi_selection_active = False
+        self.roi_selection_active = False # Deactivate selection mode
         if hasattr(self, "roi_tab"): self.roi_tab.on_roi_selection_toggled(False)
 
+        # Validate coordinates and size
         if coords is None or len(coords) != 4:
             print("ROI definition failed (invalid coords).")
-            if self.using_snapshot: self.return_to_live()
+            if self.using_snapshot: self.return_to_live() # Exit snapshot
             return
 
         x1d, y1d, x2d, y2d = map(int, coords)
-        min_size = 5
+        min_size = 5 # Minimum size in pixels on the canvas
         if abs(x2d - x1d) < min_size or abs(y2d - y1d) < min_size:
             messagebox.showwarning("ROI Too Small", f"Defined region too small (min {min_size}x{min_size} px required).", parent=self.master)
-            if self.using_snapshot: self.return_to_live()
+            if self.using_snapshot: self.return_to_live() # Exit snapshot
             return
 
+        # --- Get ROI Name ---
         roi_name = self.roi_tab.roi_name_entry.get().strip()
         overwrite_name = None
         existing_names = {r.name for r in self.rois if r.name != SNIP_ROI_NAME}
 
-        if not roi_name:
+        if not roi_name: # Generate default name if empty
             i = 1; roi_name = f"roi_{i}"
             while roi_name in existing_names: i += 1; roi_name = f"roi_{i}"
-        elif roi_name in existing_names:
+        elif roi_name in existing_names: # Check for overwrite
             if not messagebox.askyesno("ROI Exists", f"An ROI named '{roi_name}' already exists. Overwrite it?", parent=self.master):
-                if self.using_snapshot: self.return_to_live()
+                if self.using_snapshot: self.return_to_live() # Exit snapshot if user cancels
                 return
             overwrite_name = roi_name
-        elif roi_name == SNIP_ROI_NAME:
+        elif roi_name == SNIP_ROI_NAME: # Check for reserved name
             messagebox.showerror("Invalid Name", f"Cannot use the reserved name '{SNIP_ROI_NAME}'. Please choose another.", parent=self.master)
-            if self.using_snapshot: self.return_to_live()
+            if self.using_snapshot: self.return_to_live() # Exit snapshot
             return
 
+        # --- Convert Canvas Coords to Original Frame Coords ---
         ox, oy = self.frame_display_coords["x"], self.frame_display_coords["y"]
+        # Coords relative to the displayed image's top-left corner
         rx1, ry1 = min(x1d, x2d) - ox, min(y1d, y2d) - oy
         rx2, ry2 = max(x1d, x2d) - ox, max(y1d, y2d) - oy
 
+        # Check for valid scaling factor
         if self.scale_x <= 0 or self.scale_y <= 0:
             print("Error: Invalid scaling factor during ROI creation.")
-            if self.using_snapshot: self.return_to_live()
+            if self.using_snapshot: self.return_to_live() # Exit snapshot
             return
 
+        # Convert relative display coords back to original frame coords
         orig_x1, orig_y1 = int(rx1 / self.scale_x), int(ry1 / self.scale_y)
         orig_x2, orig_y2 = int(rx2 / self.scale_x), int(ry2 / self.scale_y)
 
+        # Final size check in original coordinates
         if abs(orig_x2 - orig_x1) < 1 or abs(orig_y2 - orig_y1) < 1:
             messagebox.showwarning("ROI Too Small", "Calculated ROI size is too small in original frame.", parent=self.master)
-            if self.using_snapshot: self.return_to_live()
+            if self.using_snapshot: self.return_to_live() # Exit snapshot
             return
 
+        # --- Create or Update ROI Object ---
         new_roi = ROI(roi_name, orig_x1, orig_y1, orig_x2, orig_y2)
 
         if overwrite_name:
             found = False
             for i, r in enumerate(self.rois):
                 if r.name == overwrite_name:
+                    # Preserve color filter settings when overwriting geometry
                     new_roi.color_filter_enabled = r.color_filter_enabled
                     new_roi.target_color = r.target_color
-                    new_roi.replacement_color = r.replacement_color # Preserve replacement color too
+                    new_roi.replacement_color = r.replacement_color
                     new_roi.color_threshold = r.color_threshold
                     self.rois[i] = new_roi
                     found = True
                     break
-            if not found:
+            if not found: # Should not happen if overwrite_name was set
                 print(f"Warning: Tried to overwrite '{overwrite_name}' but not found.")
-                self.rois.append(new_roi)
+                self.rois.append(new_roi) # Add as new if somehow not found
         else:
+            # Add the new ROI to the list
             self.rois.append(new_roi)
 
         print(f"Created/Updated ROI: {new_roi.to_dict()}")
 
-        if hasattr(self, "roi_tab"): self.roi_tab.update_roi_list()
-        self._draw_rois()
+        # --- Update UI and State ---
+        if hasattr(self, "roi_tab"): self.roi_tab.update_roi_list() # Update listbox
+        self._draw_rois() # Redraw ROIs on canvas
         action = "created" if not overwrite_name else "updated"
         self.update_status(f"ROI '{roi_name}' {action}. Remember to save ROI settings.")
 
+        # Suggest next ROI name in the entry box
         if hasattr(self, "roi_tab"):
             existing_names_now = {r.name for r in self.rois if r.name != SNIP_ROI_NAME}
             next_name = "dialogue" if "dialogue" not in existing_names_now else ""
-            if not next_name:
+            if not next_name: # Generate roi_N if dialogue exists
                 i = 1; next_name = f"roi_{i}"
                 while next_name in existing_names_now: i += 1; next_name = f"roi_{i}"
             self.roi_tab.roi_name_entry.delete(0, tk.END)
             self.roi_tab.roi_name_entry.insert(0, next_name)
 
+        # Create or update the corresponding overlay window
         if hasattr(self, "overlay_manager"):
             self.overlay_manager.create_overlay_for_roi(new_roi)
 
+        # Return to live view if we were in snapshot mode
         if self.using_snapshot: self.return_to_live()
 
     # --- Floating Controls and Closing ---
@@ -1246,9 +1342,9 @@ class VisualNovelTranslatorApp:
             if self.floating_controls is None or not self.floating_controls.winfo_exists():
                 self.floating_controls = FloatingControls(self.master, self)
             else:
-                self.floating_controls.deiconify()
-                self.floating_controls.lift()
-                self.floating_controls.update_button_states()
+                self.floating_controls.deiconify() # Ensure it's not minimized/withdrawn
+                self.floating_controls.lift()      # Bring to top
+                self.floating_controls.update_button_states() # Sync button states
         except Exception as e:
             print(f"Error showing floating controls: {e}")
             self.update_status("Error showing controls.")
@@ -1261,61 +1357,75 @@ class VisualNovelTranslatorApp:
     def on_close(self):
         """Handles the application closing sequence."""
         print("Close requested...")
+        # Cancel any active modes
         if self.snip_mode_active: self.cancel_snip_mode()
         if self.roi_selection_active: self.toggle_roi_selection()
 
+        # Close the snip result window if it's open
         if self.current_snip_window and self.current_snip_window.winfo_exists():
             try: self.current_snip_window.destroy_window()
             except Exception: pass
             self.current_snip_window = None
 
+        # Stop capture if running and wait for it to finish
         if self.capturing:
             self.update_status("Stopping capture before closing...")
             self.stop_capture()
+            # Schedule check to finalize close after capture stops
             self.master.after(500, self.check_capture_stopped_and_close)
         else:
+            # If not capturing, proceed to final close steps directly
             self._finalize_close()
 
     def check_capture_stopped_and_close(self):
         """Checks if capture thread is stopped, then finalizes close."""
+        # Check if capture flag is off AND thread is gone or dead
         if not self.capturing and (self.capture_thread is None or not self.capture_thread.is_alive()):
             self._finalize_close()
         else:
+            # Still waiting for capture to stop
             print("Waiting for capture thread to stop...")
             self.master.after(500, self.check_capture_stopped_and_close)
 
     def _finalize_close(self):
         """Performs final cleanup before exiting."""
         print("Finalizing close...")
-        self.capturing = False
+        self.capturing = False # Ensure flag is false
 
+        # Destroy all overlay windows managed by the manager
         if hasattr(self, "overlay_manager"):
             self.overlay_manager.destroy_all_overlays()
 
+        # Save floating controls position and destroy the window
         if self.floating_controls and self.floating_controls.winfo_exists():
             try:
+                # Only save position if the window is visible (not withdrawn)
                 if self.floating_controls.state() == "normal":
                     geo = self.floating_controls.geometry()
                     parts = geo.split('+')
-                    if len(parts) == 3:
+                    if len(parts) == 3: # Format like WxH+X+Y
                         x_str, y_str = parts[1], parts[2]
+                        # Basic check if coordinates look valid
                         if x_str.isdigit() and y_str.isdigit():
                             set_setting("floating_controls_pos", f"{x_str},{y_str}")
                         else: print(f"Warn: Invalid floating controls coordinates in geometry: {geo}")
                     else: print(f"Warn: Could not parse floating controls geometry: {geo}")
             except Exception as e: print(f"Error saving floating controls position: {e}")
+            # Destroy the window regardless of saving position
             try: self.floating_controls.destroy()
-            except tk.TclError: pass
+            except tk.TclError: pass # Ignore error if already destroyed
 
+        # Ensure snip result window is destroyed (double check)
         if self.current_snip_window and self.current_snip_window.winfo_exists():
             try: self.current_snip_window.destroy_window()
             except Exception: pass
 
         print("Exiting application.")
         try:
+            # Standard Tkinter exit sequence
             self.master.quit()
             self.master.destroy()
-        except tk.TclError: pass
+        except tk.TclError: pass # Ignore errors if widgets already gone
         except Exception as e: print(f"Error during final window destruction: {e}")
 
 # --- END OF FILE app.py ---

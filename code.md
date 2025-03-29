@@ -1,897 +1,628 @@
-Okay, this involves changes across several files to integrate the color filtering logic, UI configuration, and preview functionality.
+Okay, here are the full scripts for the files that need changes to implement OCR engine switching between PaddleOCR, EasyOCR, and Windows OCR.
 
-Here are the full contents of the modified files:
+**Important Notes:**
 
-**1. `utils/roi.py` (Updated)**
+1.  **Dependencies:** You will need to install `easyocr` and potentially `pywinrt` for Windows OCR.
+    *   `pip install easyocr`
+    *   `pip install pywinrt` (May require specific build tools/SDKs depending on your Windows setup).
+2.  **Windows OCR:** Windows OCR availability depends on the language packs installed on your Windows system. Not all languages supported by Paddle/EasyOCR are available in Windows OCR. The code includes checks, but functionality depends on the OS configuration.
+3.  **Models:** EasyOCR and PaddleOCR will download models on first use for a specific language. This can take time and requires an internet connection initially.
+4.  **Error Handling:** Basic error handling is included, but real-world usage might reveal more edge cases.
+5.  **Performance:** Different engines have varying performance characteristics (speed, accuracy, resource usage).
 
-```python
-# --- START OF FILE roi.py ---
-
-import cv2
-import numpy as np
-import tkinter as tk # Added for color conversion
-
-class ROI:
-    def __init__(self, name, x1, y1, x2, y2,
-                 color_filter_enabled=False, target_color=(255, 255, 255), color_threshold=30):
-        self.name = name
-        self.x1 = min(x1, x2)
-        self.y1 = min(y1, y2)
-        self.x2 = max(x1, x2)
-        self.y2 = max(y1, y2)
-        # Color Filtering Attributes
-        self.color_filter_enabled = color_filter_enabled
-        # Store target_color consistently as an RGB tuple (int, int, int)
-        if isinstance(target_color, str):
-             # Attempt conversion from hex if needed (e.g., from old format)
-             try:
-                 hex_color = target_color.lstrip('#')
-                 self.target_color = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-             except:
-                 self.target_color = (255, 255, 255) # Default fallback
-        elif isinstance(target_color, (list, tuple)) and len(target_color) == 3:
-             self.target_color = tuple(int(c) for c in target_color)
-        else:
-             self.target_color = (255, 255, 255) # Default fallback
-
-        try:
-            self.color_threshold = int(color_threshold)
-        except (ValueError, TypeError):
-            self.color_threshold = 30
-
-    def to_dict(self):
-        return {
-            "name": self.name,
-            "x1": self.x1, "y1": self.y1, "x2": self.x2, "y2": self.y2,
-            "color_filter_enabled": self.color_filter_enabled,
-            "target_color": self.target_color, # Save as RGB tuple
-            "color_threshold": self.color_threshold
-        }
-
-    @classmethod
-    def from_dict(cls, data):
-        # Provide defaults for backward compatibility
-        color_filter_enabled = data.get("color_filter_enabled", False)
-        target_color = data.get("target_color", (255, 255, 255)) # Expecting RGB tuple
-        color_threshold = data.get("color_threshold", 30)
-        return cls(data["name"], data["x1"], data["y1"], data["x2"], data["y2"],
-                   color_filter_enabled, target_color, color_threshold)
-
-    def extract_roi(self, frame):
-        """Extracts the ROI portion from the frame."""
-        try:
-            h, w = frame.shape[:2]
-            # Ensure coordinates are within frame bounds
-            y1 = max(0, int(self.y1))
-            y2 = min(h, int(self.y2))
-            x1 = max(0, int(self.x1))
-            x2 = min(w, int(self.x2))
-            # Check for invalid dimensions after clamping
-            if y1 >= y2 or x1 >= x2:
-                # print(f"Warning: ROI '{self.name}' has invalid dimensions after clamping ({x1},{y1} to {x2},{y2}).")
-                return None
-            return frame[y1:y2, x1:x2]
-        except Exception as e:
-            print(f"Error extracting ROI image for {self.name}: {e}")
-            return None
-
-    def apply_color_filter(self, roi_img):
-        """Applies color filtering to the extracted ROI image if enabled."""
-        if not self.color_filter_enabled or roi_img is None:
-            return roi_img
-
-        try:
-            # Target color is stored as RGB, convert to BGR for OpenCV
-            target_bgr = self.target_color[::-1]
-            thresh = self.color_threshold
-
-            # Calculate lower and upper bounds in BGR
-            lower_bound = np.array([max(0, c - thresh) for c in target_bgr], dtype=np.uint8)
-            upper_bound = np.array([min(255, c + thresh) for c in target_bgr], dtype=np.uint8)
-
-            # Create a mask where pixels are within the threshold
-            mask = cv2.inRange(roi_img, lower_bound, upper_bound)
-
-            # Create a black background image
-            # background = np.zeros_like(roi_img) # Option 1: Black background
-            background = np.full_like(roi_img, (255, 255, 255)) # Option 2: White background (often better for OCR)
-
-
-            # Copy only the pixels within the mask from the original ROI to the background
-            # This keeps the original color of the matching pixels
-            filtered_img = cv2.bitwise_and(roi_img, roi_img, mask=mask)
-
-            # Combine the filtered pixels with the inverse mask of the background
-            # Pixels outside the mask will take the background color
-            background_masked = cv2.bitwise_and(background, background, mask=cv2.bitwise_not(mask))
-            result_img = cv2.add(filtered_img, background_masked)
-
-
-            # --- Alternative: Make non-matching pixels black ---
-            # result_img = roi_img.copy()
-            # result_img[mask == 0] = [0, 0, 0] # Set non-matching pixels to black
-            # ---
-
-            return result_img
-
-        except Exception as e:
-            print(f"Error applying color filter for ROI {self.name}: {e}")
-            return roi_img # Return original on error
-
-    def get_overlay_config(self, global_settings):
-        # This remains unchanged, deals only with overlay appearance
-        from ui.overlay_manager import OverlayManager # Keep import local if needed
-        # Find the OverlayManager's default config if possible, otherwise use a hardcoded one
-        try:
-            defaults = OverlayManager.DEFAULT_OVERLAY_CONFIG.copy()
-        except AttributeError:
-             # Fallback if OverlayManager or its constant isn't available yet
-             defaults = {
-                 "enabled": True, "font_family": "Segoe UI", "font_size": 14,
-                 "font_color": "white", "bg_color": "#222222", "alpha": 1.0,
-                 "wraplength": 450, "justify": "left", "geometry": None
-             }
-
-        roi_specific_settings = global_settings.get('overlay_settings', {}).get(self.name, {})
-        config = defaults.copy()
-        config.update(roi_specific_settings)
-        return config
-
-    @staticmethod
-    def rgb_to_hex(rgb_tuple):
-        """Converts an (R, G, B) tuple to #RRGGBB hex string."""
-        try:
-            return f"#{int(rgb_tuple[0]):02x}{int(rgb_tuple[1]):02x}{int(rgb_tuple[2]):02x}"
-        except:
-            return "#FFFFFF" # Fallback
-
-    @staticmethod
-    def hex_to_rgb(hex_string):
-        """Converts an #RRGGBB hex string to (R, G, B) tuple."""
-        try:
-            hex_color = hex_string.lstrip('#')
-            return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-        except:
-            return (255, 255, 255) # Fallback
-
-# --- END OF FILE roi.py ---
-```
-
-**2. `utils/config.py` (Updated)**
+--- START OF FILE utils/settings.py ---
 
 ```python
-# --- START OF FILE config.py ---
-
 import json
 import os
-import tkinter.messagebox as messagebox
-from utils.roi import ROI # Ensure ROI class is imported
-from utils.settings import set_setting, get_setting # Keep these if still used elsewhere
-from utils.capture import get_executable_details
-import hashlib
-from pathlib import Path
 
-PRESETS_FILE = "translation_presets.json"
-APP_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-ROI_CONFIGS_DIR = APP_DIR / "roi_configs"
+SETTINGS_FILE = "vn_translator_settings.json"
 
-def _ensure_roi_configs_dir():
-    try:
-        ROI_CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        print(f"Error creating ROI configs directory {ROI_CONFIGS_DIR}: {e}")
+DEFAULT_SETTINGS = {
+    "last_preset_name": None,
+    "target_language": "en",
+    "stable_threshold": 3,
+    "max_display_width": 800,
+    "max_display_height": 600,
+    "auto_translate": False,
+    "ocr_language": "jpn",
+    "ocr_engine": "paddle", # Added: default engine
+    "global_overlays_enabled": True,
+    "overlay_settings": {},
+    "floating_controls_pos": None,
+    "game_specific_context": {}
+}
 
-def _get_game_hash(hwnd):
-    # This function remains the same
-    exe_path, file_size = get_executable_details(hwnd)
-    if exe_path and file_size is not None:
+DEFAULT_SINGLE_OVERLAY_CONFIG = {
+    "enabled": True,
+    "font_family": "Segoe UI",
+    "font_size": 14,
+    "font_color": "white",
+    "bg_color": "#222222",
+    "alpha": 1.0,
+    "wraplength": 450,
+    "justify": "left",
+    "geometry": None
+}
+
+def load_settings():
+    settings = DEFAULT_SETTINGS.copy()
+    if os.path.exists(SETTINGS_FILE):
         try:
-            # Normalize path separators and case for consistency
-            identity_string = f"{os.path.normpath(exe_path).lower()}|{file_size}"
-            hasher = hashlib.sha256()
-            hasher.update(identity_string.encode('utf-8'))
-            return hasher.hexdigest()
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                loaded_settings = json.load(f)
+            # Ensure all default keys are present, using defaults if missing
+            for key, default_value in DEFAULT_SETTINGS.items():
+                settings[key] = loaded_settings.get(key, default_value)
         except Exception as e:
-            print(f"Error generating game hash: {e}")
-    return None
+            print(f"Error loading settings: {e}. Using defaults.")
+    return settings
 
-def _get_roi_config_path(hwnd):
-    # This function remains the same
-    game_hash = _get_game_hash(hwnd)
-    if game_hash:
-        return ROI_CONFIGS_DIR / f"{game_hash}_rois.json"
-    else:
-        print("Warning: Could not determine game hash for ROI config path.")
-        return None
-
-def save_rois(rois, hwnd):
-    """Saves the list of ROI objects to a game-specific JSON file."""
-    if not hwnd:
-        messagebox.showerror("Error", "Cannot save ROIs: No game window selected.")
-        return None
-    # Allow saving an empty list to clear config for a game
-    # if not rois:
-    #     messagebox.showwarning("Warning", "No ROIs defined to save.")
-    #     return None
-
-    _ensure_roi_configs_dir()
-    save_path = _get_roi_config_path(hwnd)
-    if not save_path:
-        messagebox.showerror("Error", "Could not determine game-specific file path to save ROIs.")
-        return None
-
+def save_settings(settings):
     try:
-        # Use the updated ROI.to_dict() which includes color filter settings
-        roi_data = [roi.to_dict() for roi in rois]
-        with open(save_path, 'w', encoding="utf-8") as f:
-            json.dump(roi_data, f, indent=2)
-        print(f"ROIs saved successfully for current game to {save_path.name}")
-        return str(save_path)
-    except Exception as e:
-        messagebox.showerror("Error", f"Failed to save ROIs to {save_path.name}: {str(e)}")
-        return None
-
-def load_rois(hwnd):
-    """Loads ROIs from a game-specific JSON file."""
-    if not hwnd:
-        print("Cannot load ROIs: No game window handle provided.")
-        return [], None # Return empty list and None path
-
-    _ensure_roi_configs_dir()
-    load_path = _get_roi_config_path(hwnd)
-    rois = []
-    if not load_path:
-        print("Could not determine game-specific file path to load ROIs.")
-        return [], None # Return empty list and None path
-
-    if load_path.exists():
-        try:
-            with open(load_path, 'r', encoding="utf-8") as f:
-                content = f.read()
-                if not content.strip(): # Handle empty file
-                    print(f"ROI config file found but empty: {load_path.name}")
-                    return [], str(load_path) # Return empty list but valid path
-
-                roi_data = json.loads(content)
-                if not isinstance(roi_data, list):
-                     print(f"Error: ROI config file {load_path.name} does not contain a list.")
-                     return [], str(load_path) # Return empty list but valid path
-
-            # Use the updated ROI.from_dict() which handles missing color filter keys
-            rois = [ROI.from_dict(data) for data in roi_data]
-            print(f"ROIs loaded successfully for current game from {load_path.name}")
-            return rois, str(load_path)
-
-        except json.JSONDecodeError as e:
-             messagebox.showerror("Error", f"Failed to load ROIs from '{load_path.name}': Invalid JSON - {str(e)}")
-             return [], None # Indicate load failure
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to load ROIs from '{load_path.name}': {str(e)}")
-            return [], None # Indicate load failure
-    else:
-        print(f"No ROI config file found for current game ({load_path.name}).")
-        return [], None # No file found, return empty list and None path
-
-# --- Translation Preset functions remain the same ---
-def save_translation_presets(presets, file_path=PRESETS_FILE):
-    try:
-        preset_path_obj = Path(file_path)
-        preset_path_obj.parent.mkdir(parents=True, exist_ok=True)
-        with open(preset_path_obj, "w", encoding="utf-8") as f:
-            json.dump(presets, f, indent=2)
-        print(f"Translation presets saved to {file_path}")
+        # Ensure only valid keys are saved (optional, but good practice)
+        valid_settings = {k: settings.get(k, DEFAULT_SETTINGS.get(k)) for k in DEFAULT_SETTINGS}
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(valid_settings, f, indent=2)
         return True
     except Exception as e:
-        print(f"Error saving translation presets: {e}")
-        messagebox.showerror("Error", f"Failed to save translation presets: {e}")
+        print(f"Error saving settings: {e}")
         return False
 
-def load_translation_presets(file_path=PRESETS_FILE):
-    preset_path_obj = Path(file_path)
-    if preset_path_obj.exists():
-        try:
-            with open(preset_path_obj, "r", encoding="utf-8") as f:
-                content = f.read()
-                if not content:
-                    return {} # Return empty dict for empty file
-                return json.loads(content)
-        except json.JSONDecodeError:
-            print(f"Error: Translation presets file '{file_path}' is corrupted or empty.")
-            messagebox.showerror("Preset Load Error", f"Could not load presets from '{file_path}'. File might be corrupted.")
-            return {}
-        except Exception as e:
-            print(f"Error loading translation presets: {e}")
-            messagebox.showerror("Error", f"Failed to load translation presets: {e}.")
-            return {} # Return empty dict on other errors
-    return {} # Return empty dict if file doesn't exist
+def get_setting(key, default=None):
+    settings = load_settings()
+    # Use the default from DEFAULT_SETTINGS if key exists there, otherwise use the provided default
+    fallback_default = DEFAULT_SETTINGS.get(key, default)
+    return settings.get(key, fallback_default)
 
-# --- END OF FILE config.py ---
+def set_setting(key, value):
+    settings = load_settings()
+    settings[key] = value
+    return save_settings(settings)
+
+def update_settings(new_values):
+    settings = load_settings()
+    settings.update(new_values)
+    return save_settings(settings)
+
+def get_overlay_config_for_roi(roi_name):
+    config = DEFAULT_SINGLE_OVERLAY_CONFIG.copy()
+    all_overlay_settings = get_setting("overlay_settings", {})
+    roi_specific_saved = all_overlay_settings.get(roi_name, {})
+    config.update(roi_specific_saved)
+    # Ensure required keys have default values if somehow missing after update
+    for key, default_value in DEFAULT_SINGLE_OVERLAY_CONFIG.items():
+        if key not in config:
+            config[key] = default_value
+    return config
+
+def save_overlay_config_for_roi(roi_name, new_partial_config):
+    all_overlay_settings = get_setting("overlay_settings", {})
+    if roi_name not in all_overlay_settings:
+        all_overlay_settings[roi_name] = {}
+
+    # Update existing config with new values, preserving geometry handling
+    current_config = all_overlay_settings.get(roi_name, {})
+    current_config.update(new_partial_config)
+    all_overlay_settings[roi_name] = current_config
+
+    # Special handling for geometry reset (setting it to None)
+    if 'geometry' in new_partial_config and new_partial_config['geometry'] is None:
+         all_overlay_settings[roi_name]['geometry'] = None
+
+    return update_settings({"overlay_settings": all_overlay_settings})
+
 ```
 
-**3. `ui/roi_tab.py` (Updated)**
+--- END OF FILE utils/settings.py ---
+
+--- START OF FILE utils/ocr.py ---
 
 ```python
-# --- START OF FILE roi_tab.py ---
+import time
+import threading
+import numpy as np
 
-import tkinter as tk
-from tkinter import ttk, messagebox, colorchooser
-from ui.base import BaseTab
-from utils.config import save_rois
-from utils.settings import get_overlay_config_for_roi, update_settings, get_setting # Keep settings import if needed elsewhere
-from utils.roi import ROI # Import ROI for color conversion
-from ui.overlay_tab import SNIP_ROI_NAME
-from ui.preview_window import PreviewWindow # Import the new preview window
-from ui.color_picker import ScreenColorPicker # Import the screen color picker
-import os
-import cv2 # Needed for preview generation
+# --- Engine Specific Imports ---
+try:
+    from paddleocr import PaddleOCR
+    _paddle_available = True
+except ImportError:
+    _paddle_available = False
+    print("PaddleOCR not found. Install with 'pip install paddlepaddle paddleocr'")
 
-class ROITab(BaseTab):
-    def setup_ui(self):
-        # --- Main ROI definition and list ---
-        roi_frame = ttk.LabelFrame(self.frame, text="Regions of Interest (ROIs)", padding="10")
-        roi_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+try:
+    import easyocr
+    _easyocr_available = True
+except ImportError:
+    _easyocr_available = False
+    print("EasyOCR not found. Install with 'pip install easyocr'")
 
-        # Top part: Create ROI
-        create_frame = ttk.Frame(roi_frame)
-        create_frame.pack(fill=tk.X, pady=(0, 5))
-        ttk.Label(create_frame, text="New ROI Name:").pack(side=tk.LEFT, anchor=tk.W, pady=(5, 0), padx=(0, 5))
-        self.roi_name_entry = ttk.Entry(create_frame, width=15)
-        self.roi_name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, pady=(5, 0))
-        self.roi_name_entry.insert(0, "dialogue")
-        self.create_roi_btn = ttk.Button(create_frame, text="Define ROI", command=self.app.toggle_roi_selection)
-        self.create_roi_btn.pack(side=tk.LEFT, padx=(5, 0), pady=(5, 0))
-        ttk.Label(roi_frame, text="Click 'Define ROI', then click and drag on the image preview.", font=('TkDefaultFont', 8)).pack(anchor=tk.W, pady=(0, 5))
+try:
+    # pywinrt is required for Windows OCR
+    import asyncio
+    import winrt.windows.media.ocr as win_ocr
+    import winrt.windows.graphics.imaging as win_imaging
+    import winrt.windows.storage.streams as win_streams
+    _windows_ocr_available = True
+except ImportError:
+    _windows_ocr_available = False
+    print("Windows OCR components (pywinrt) not found or failed to import. Install with 'pip install pywinrt'")
 
-        # Middle part: List and management buttons
-        list_manage_frame = ttk.Frame(roi_frame)
-        list_manage_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+# --- Globals for Engine Instances (Lazy Initialization) ---
+_paddle_ocr_instance = None
+_paddle_lang_loaded = None
+_easyocr_instance = None
+_easyocr_lang_loaded = None
+_windows_ocr_engines = {} # Cache engines per language
+_init_lock = threading.Lock() # Lock for initializing engines
 
-        # ROI Listbox
-        list_frame = ttk.Frame(list_manage_frame)
-        list_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
-        ttk.Label(list_frame, text="Current Game ROIs ([O]=Overlay, [C]=Color Filter):").pack(anchor=tk.W)
-        roi_scrollbar = ttk.Scrollbar(list_frame)
-        roi_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.roi_listbox = tk.Listbox(list_frame, height=6, selectmode=tk.SINGLE, exportselection=False, yscrollcommand=roi_scrollbar.set)
-        self.roi_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        roi_scrollbar.config(command=self.roi_listbox.yview)
-        self.roi_listbox.bind("<<ListboxSelect>>", self.on_roi_selected)
+# --- Language Mappings ---
+# Map internal codes ('jpn', 'eng', etc.) to engine-specific codes
+PADDLE_LANG_MAP = {
+    "jpn": "japan", "jpn_vert": "japan", "eng": "en",
+    "chi_sim": "ch", "chi_tra": "ch", "kor": "ko",
+    # Add more mappings as needed
+}
+EASYOCR_LANG_MAP = {
+    "jpn": "ja", "jpn_vert": "ja", "eng": "en",
+    "chi_sim": "ch_sim", "chi_tra": "ch_tra", "kor": "ko",
+    # Add more mappings as needed
+}
+WINDOWS_OCR_LANG_MAP = {
+    "jpn": "ja", "jpn_vert": "ja", "eng": "en-US", # Often needs region specific
+    "chi_sim": "zh-Hans", "chi_tra": "zh-Hant", "kor": "ko",
+    # Add more mappings as needed - check installed Windows languages
+}
 
-        # Management Buttons (Up/Down/Delete/Overlay Config)
-        manage_btn_frame = ttk.Frame(list_manage_frame)
-        manage_btn_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(5, 0))
-        self.move_up_btn = ttk.Button(manage_btn_frame, text="▲ Up", width=8, command=self.move_roi_up, state=tk.DISABLED)
-        self.move_up_btn.pack(pady=2, anchor=tk.N)
-        self.move_down_btn = ttk.Button(manage_btn_frame, text="▼ Down", width=8, command=self.move_roi_down, state=tk.DISABLED)
-        self.move_down_btn.pack(pady=2, anchor=tk.N)
-        self.delete_roi_btn = ttk.Button(manage_btn_frame, text="Delete", width=8, command=self.delete_selected_roi, state=tk.DISABLED)
-        self.delete_roi_btn.pack(pady=(10, 2), anchor=tk.N)
-        self.config_overlay_btn = ttk.Button(manage_btn_frame, text="Overlay...", width=8, command=self.configure_selected_overlay, state=tk.DISABLED)
-        self.config_overlay_btn.pack(pady=(5, 2), anchor=tk.N)
+# --- Engine Initialization Functions ---
 
-        # --- Color Filter Configuration ---
-        self.color_filter_frame = ttk.LabelFrame(self.frame, text="Color Filtering (for selected ROI)", padding="10")
-        self.color_filter_frame.pack(fill=tk.X, pady=(5, 5))
-        self.color_widgets = {} # Dictionary to hold color filter widgets
+def _init_paddle(lang_code):
+    global _paddle_ocr_instance, _paddle_lang_loaded
+    if not _paddle_available:
+        raise RuntimeError("PaddleOCR library is not installed.")
 
-        # Enable Checkbox
-        self.color_widgets['enabled_var'] = tk.BooleanVar(value=False)
-        self.color_widgets['enabled_check'] = ttk.Checkbutton(
-            self.color_filter_frame, text="Enable Color Filter", variable=self.color_widgets['enabled_var']
-        )
-        self.color_widgets['enabled_check'].grid(row=0, column=0, columnspan=4, sticky=tk.W, pady=(0, 5))
+    target_lang = PADDLE_LANG_MAP.get(lang_code, "en") # Default to English if map missing
+    if _paddle_ocr_instance and _paddle_lang_loaded == target_lang:
+        return _paddle_ocr_instance
 
-        # Target Color
-        ttk.Label(self.color_filter_frame, text="Target Color:").grid(row=1, column=0, sticky=tk.W, padx=(0, 5), pady=2)
-        self.color_widgets['target_color_var'] = tk.StringVar(value="#FFFFFF") # Store as hex for UI
-        self.color_widgets['target_color_label'] = ttk.Label(self.color_filter_frame, text="       ", background="#FFFFFF", relief=tk.SUNKEN, width=8)
-        self.color_widgets['target_color_label'].grid(row=1, column=1, sticky=tk.W, pady=2)
-        self.color_widgets['pick_color_btn'] = ttk.Button(self.color_filter_frame, text="Pick...", width=6, command=self.pick_color)
-        self.color_widgets['pick_color_btn'].grid(row=1, column=2, padx=(5, 2), pady=2)
-        self.color_widgets['pick_screen_btn'] = ttk.Button(self.color_filter_frame, text="Screen", width=7, command=self.pick_color_from_screen)
-        self.color_widgets['pick_screen_btn'].grid(row=1, column=3, padx=(2, 0), pady=2)
+    print(f"[OCR Init] Initializing PaddleOCR for language: {target_lang} (requested: {lang_code})")
+    start_time = time.time()
+    try:
+        # use_angle_cls=True helps with rotated text but might be slower
+        # show_log=False prevents excessive console output
+        instance = PaddleOCR(use_angle_cls=True, lang=target_lang, show_log=False)
+        _paddle_ocr_instance = instance
+        _paddle_lang_loaded = target_lang
+        print(f"[OCR Init] PaddleOCR initialized in {time.time() - start_time:.2f}s")
+        return instance
+    except Exception as e:
+        print(f"[OCR Init] !!! Error initializing PaddleOCR: {e}")
+        _paddle_ocr_instance = None
+        _paddle_lang_loaded = None
+        raise RuntimeError(f"Failed to initialize PaddleOCR: {e}")
 
-        # Threshold
-        ttk.Label(self.color_filter_frame, text="Threshold:").grid(row=2, column=0, sticky=tk.W, padx=(0, 5), pady=2)
-        self.color_widgets['threshold_var'] = tk.IntVar(value=30)
-        self.color_widgets['threshold_scale'] = ttk.Scale(
-            self.color_filter_frame, from_=0, to=100, orient=tk.HORIZONTAL,
-            variable=self.color_widgets['threshold_var'], length=150,
-            command=lambda v: self.color_widgets['threshold_label_var'].set(f"{int(float(v))}")
-        )
-        self.color_widgets['threshold_scale'].grid(row=2, column=1, columnspan=2, sticky=tk.EW, pady=2)
-        self.color_widgets['threshold_label_var'] = tk.StringVar(value="30")
-        ttk.Label(self.color_filter_frame, textvariable=self.color_widgets['threshold_label_var'], width=4).grid(row=2, column=3, sticky=tk.W, padx=(5, 0), pady=2)
+def _init_easyocr(lang_code):
+    global _easyocr_instance, _easyocr_lang_loaded
+    if not _easyocr_available:
+        raise RuntimeError("EasyOCR library is not installed.")
 
-        # Apply & Preview Buttons
-        color_btn_frame = ttk.Frame(self.color_filter_frame)
-        color_btn_frame.grid(row=3, column=0, columnspan=4, pady=(10, 0))
-        self.color_widgets['apply_btn'] = ttk.Button(color_btn_frame, text="Apply Filter Settings", command=self.apply_color_filter_settings)
-        self.color_widgets['apply_btn'].pack(side=tk.LEFT, padx=5)
-        self.color_widgets['preview_orig_btn'] = ttk.Button(color_btn_frame, text="Preview Original", command=self.show_original_preview)
-        self.color_widgets['preview_orig_btn'].pack(side=tk.LEFT, padx=5)
-        self.color_widgets['preview_filter_btn'] = ttk.Button(color_btn_frame, text="Preview Filtered", command=self.show_filtered_preview)
-        self.color_widgets['preview_filter_btn'].pack(side=tk.LEFT, padx=5)
+    target_lang = EASYOCR_LANG_MAP.get(lang_code)
+    if not target_lang:
+        raise ValueError(f"Language code '{lang_code}' not supported by EasyOCR mapping.")
 
-        # --- Bottom part: Save All ROIs ---
-        file_btn_frame = ttk.Frame(self.frame) # Place it directly in self.frame now
-        file_btn_frame.pack(fill=tk.X, pady=(5, 10))
-        self.save_rois_btn = ttk.Button(file_btn_frame, text="Save All ROI Settings for Current Game", command=self.save_rois_for_current_game)
-        self.save_rois_btn.pack(side=tk.LEFT, padx=5)
+    # EasyOCR uses a list of languages
+    target_lang_list = [target_lang]
+    if _easyocr_instance and _easyocr_lang_loaded == target_lang_list:
+        return _easyocr_instance
 
-        # Initial state
-        self.update_roi_list()
-        self.set_color_filter_widgets_state(tk.DISABLED)
+    print(f"[OCR Init] Initializing EasyOCR for language: {target_lang_list} (requested: {lang_code})")
+    start_time = time.time()
+    try:
+        # gpu=True can significantly speed up if CUDA is available and configured
+        instance = easyocr.Reader(target_lang_list, gpu=True)
+        _easyocr_instance = instance
+        _easyocr_lang_loaded = target_lang_list
+        print(f"[OCR Init] EasyOCR initialized in {time.time() - start_time:.2f}s")
+        return instance
+    except Exception as e:
+        print(f"[OCR Init] !!! Error initializing EasyOCR: {e}")
+        _easyocr_instance = None
+        _easyocr_lang_loaded = None
+        raise RuntimeError(f"Failed to initialize EasyOCR: {e}")
 
-    def set_color_filter_widgets_state(self, state):
-        """Enable or disable all widgets in the color filter frame."""
-        if not hasattr(self, 'color_filter_frame') or not self.color_filter_frame.winfo_exists():
-            return
-        valid_states = (tk.NORMAL, tk.DISABLED)
-        actual_state = state if state in valid_states else tk.DISABLED
-        scale_state = tk.NORMAL if actual_state == tk.NORMAL else tk.DISABLED
+def _is_windows_ocr_lang_available(lang_code):
+    if not _windows_ocr_available:
+        return False
+    try:
+        win_lang = win_ocr.OcrLanguage(lang_code)
+        return win_ocr.OcrEngine.is_language_supported(win_lang)
+    except Exception as e:
+        # This can happen if the language code format is wrong or language not installed at all
+        print(f"[OCR Check] Windows OCR language check failed for '{lang_code}': {e}")
+        return False
 
-        try:
-            for widget in self.color_filter_frame.winfo_children():
-                widget_class = widget.winfo_class()
-                # Handle container frames like the button frame
-                if isinstance(widget, (ttk.Frame, tk.Frame)):
-                     for sub_widget in widget.winfo_children():
-                         sub_widget_class = sub_widget.winfo_class()
-                         try:
-                             if sub_widget_class in ('TButton', 'TCheckbutton'):
-                                 sub_widget.configure(state=actual_state)
-                         except tk.TclError: pass
-                # Handle direct children
-                elif widget_class in ('TButton', 'TCheckbutton'):
-                    widget.configure(state=actual_state)
-                elif widget_class in ('Scale', 'TScale'):
-                     widget.configure(state=scale_state)
-                # Labels are usually kept enabled, but could be disabled too
-                # elif widget_class in ('TLabel', 'Label'):
-                #    widget.configure(state=actual_state)
-        except tk.TclError:
-            print("TclError setting color filter widget state (widgets might be closing).")
-        except Exception as e:
-            print(f"Error setting color filter widget state: {e}")
+def _init_windows_ocr(lang_code):
+    global _windows_ocr_engines
+    if not _windows_ocr_available:
+        raise RuntimeError("Windows OCR components (pywinrt) are not available.")
 
+    target_lang = WINDOWS_OCR_LANG_MAP.get(lang_code)
+    if not target_lang:
+        raise ValueError(f"Language code '{lang_code}' not supported by Windows OCR mapping.")
 
-    def on_roi_selected(self, event=None):
-        selection = self.roi_listbox.curselection()
-        has_selection = bool(selection)
-        num_items = self.roi_listbox.size()
-        idx = selection[0] if has_selection else -1
+    if target_lang in _windows_ocr_engines:
+        return _windows_ocr_engines[target_lang]
 
-        # Update Up/Down/Delete/Overlay buttons
-        self.move_up_btn.config(state=tk.NORMAL if has_selection and idx > 0 else tk.DISABLED)
-        self.move_down_btn.config(state=tk.NORMAL if has_selection and idx < num_items - 1 else tk.DISABLED)
-        self.delete_roi_btn.config(state=tk.NORMAL if has_selection else tk.DISABLED)
-        can_config_overlay = has_selection and hasattr(self.app, 'overlay_tab') and self.app.overlay_tab.frame.winfo_exists()
-        self.config_overlay_btn.config(state=tk.NORMAL if can_config_overlay else tk.DISABLED)
+    print(f"[OCR Init] Initializing Windows OCR for language: {target_lang} (requested: {lang_code})")
+    start_time = time.time()
+    try:
+        win_lang = win_ocr.OcrLanguage(target_lang)
+        if not win_ocr.OcrEngine.is_language_supported(win_lang):
+            raise RuntimeError(f"Windows OCR language '{target_lang}' is not installed or supported on this system.")
 
-        # Update Color Filter section
-        if has_selection:
-            roi = self.get_selected_roi_object()
-            if roi:
-                self.load_color_filter_settings(roi)
-                self.set_color_filter_widgets_state(tk.NORMAL)
+        engine = win_ocr.OcrEngine.try_create_from_language(win_lang)
+        if engine is None:
+             raise RuntimeError(f"Failed to create Windows OCR engine for language '{target_lang}'.")
+
+        _windows_ocr_engines[target_lang] = engine
+        print(f"[OCR Init] Windows OCR initialized in {time.time() - start_time:.2f}s")
+        return engine
+    except Exception as e:
+        print(f"[OCR Init] !!! Error initializing Windows OCR: {e}")
+        if target_lang in _windows_ocr_engines:
+            del _windows_ocr_engines[target_lang] # Clean up cache on error
+        raise RuntimeError(f"Failed to initialize Windows OCR: {e}")
+
+# --- Windows OCR Async Helper ---
+async def _run_windows_ocr_async(engine, img_bgr):
+    """Helper to run Windows OCR asynchronously."""
+    try:
+        height, width = img_bgr.shape[:2]
+        # Ensure image is BGRA for SoftwareBitmap
+        if img_bgr.shape[2] == 3:
+            img_bgra = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2BGRA)
+        else: # Assuming BGRA already if 4 channels
+            img_bgra = img_bgr
+
+        # Create SoftwareBitmap from numpy array
+        array = np.frombuffer(img_bgra.tobytes(), dtype=np.uint8)
+        stream = win_streams.InMemoryRandomAccessStream()
+        bitmap_encoder = await win_imaging.BitmapEncoder.create_async(win_imaging.BitmapEncoder.png_encoder_id, stream)
+        bitmap_encoder.set_pixel_data(
+            win_imaging.BitmapPixelFormat.BGRA8,
+            win_imaging.BitmapAlphaMode.PREMULTIPLIED, # Or IGNORE if alpha not needed
+            width, height, 96.0, 96.0, array) # Assuming 96 DPI
+        await bitmap_encoder.flush_async()
+
+        bitmap_decoder = await win_imaging.BitmapDecoder.create_async(stream)
+        software_bitmap = await bitmap_decoder.get_software_bitmap_async()
+
+        # Perform OCR
+        ocr_result = await engine.recognize_async(software_bitmap)
+        return ocr_result.text
+    except Exception as e:
+        print(f"[OCR Error] Windows OCR async processing failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return "[Windows OCR Error]"
+
+# --- Main Extraction Function ---
+
+def extract_text(img, lang="jpn", engine_type="paddle"):
+    """
+    Extracts text from an image using the specified engine and language.
+
+    Args:
+        img (numpy.ndarray): The image (BGR format expected).
+        lang (str): The language code (e.g., 'jpn', 'eng').
+        engine_type (str): The OCR engine to use ('paddle', 'easyocr', 'windows').
+
+    Returns:
+        str: The extracted text, or an error message.
+    """
+    if img is None or img.size == 0:
+        return ""
+
+    start_time = time.time()
+    extracted_text = ""
+    engine_instance = None
+
+    try:
+        with _init_lock: # Ensure only one thread initializes an engine at a time
+            if engine_type == "paddle":
+                engine_instance = _init_paddle(lang)
+            elif engine_type == "easyocr":
+                engine_instance = _init_easyocr(lang)
+            elif engine_type == "windows":
+                engine_instance = _init_windows_ocr(lang)
             else:
-                # Should not happen if listbox selection is valid, but handle defensively
-                self.set_color_filter_widgets_state(tk.DISABLED)
-        else:
-            self.set_color_filter_widgets_state(tk.DISABLED)
+                raise ValueError(f"Unsupported OCR engine type: {engine_type}")
+
+        # --- Perform OCR using the initialized engine ---
+        if engine_type == "paddle":
+            # PaddleOCR expects BGR
+            ocr_result_raw = engine_instance.ocr(img, cls=True)
+            lines = []
+            if ocr_result_raw and isinstance(ocr_result_raw, list) and len(ocr_result_raw) > 0:
+                # Handle potential nesting difference in PaddleOCR versions
+                current_result_set = ocr_result_raw[0] if isinstance(ocr_result_raw[0], list) else ocr_result_raw
+                if current_result_set:
+                    for item in current_result_set:
+                        # Standard format: [[box], [text, score]]
+                        text_info = None
+                        if isinstance(item, list) and len(item) >= 2 and isinstance(item[1], (list, tuple)):
+                            text_info = item[1]
+                        # Older format might be: [box, text, score] - less common now
+                        elif isinstance(item, tuple) and len(item) >= 2:
+                             text_info = item # Assume text is item[1] if tuple
+                        # Extract text if valid structure found
+                        if isinstance(text_info, (tuple, list)) and len(text_info) >= 1 and text_info[0]:
+                            lines.append(str(text_info[0]))
+            extracted_text = " ".join(lines).strip()
+
+        elif engine_type == "easyocr":
+            # EasyOCR expects BGR
+            ocr_result_raw = engine_instance.readtext(img)
+            lines = [item[1] for item in ocr_result_raw if item and len(item) >= 2]
+            extracted_text = " ".join(lines).strip()
+
+        elif engine_type == "windows":
+            # Windows OCR needs async execution
+            extracted_text = asyncio.run(_run_windows_ocr_async(engine_instance, img))
+            extracted_text = extracted_text.strip() # Comes back as single block
+
+        elapsed = time.time() - start_time
+        # print(f"[OCR] Extracted ({engine_type}/{lang}) in {elapsed:.3f}s: '{extracted_text[:50]}...'")
+        return extracted_text
+
+    except RuntimeError as e: # Catch initialization errors
+        print(f"[OCR Error] Engine initialization failed: {e}")
+        return f"[{engine_type.upper()} Init Error]"
+    except ValueError as e: # Catch language mapping errors
+        print(f"[OCR Error] Language configuration error: {e}")
+        return f"[{engine_type.upper()} Lang Error]"
+    except Exception as e:
+        print(f"[OCR Error] Failed during {engine_type} OCR: {e}")
+        import traceback
+        traceback.print_exc()
+        return f"[{engine_type.upper()} Runtime Error]"
 
-    def get_selected_roi_object(self):
-        """Gets the ROI object corresponding to the listbox selection."""
-        selection = self.roi_listbox.curselection()
-        if not selection:
-            return None
-        try:
-            listbox_text = self.roi_listbox.get(selection[0])
-            # Extract name carefully, considering prefixes like [O] [C]
-            roi_name = listbox_text.split("]")[-1].strip()
-            return next((r for r in self.app.rois if r.name == roi_name), None)
-        except (tk.TclError, IndexError, StopIteration):
-            return None
-
-    def load_color_filter_settings(self, roi):
-        """Loads the color filter settings from the ROI object into the UI."""
-        if not roi or not hasattr(self, 'color_widgets'):
-            return
-        try:
-            self.color_widgets['enabled_var'].set(roi.color_filter_enabled)
-            hex_color = ROI.rgb_to_hex(roi.target_color)
-            self.color_widgets['target_color_var'].set(hex_color)
-            self.color_widgets['target_color_label'].config(background=hex_color)
-            self.color_widgets['threshold_var'].set(roi.color_threshold)
-            self.color_widgets['threshold_label_var'].set(str(roi.color_threshold))
-        except tk.TclError:
-             print("TclError loading color filter settings (widget might be destroyed).")
-        except Exception as e:
-             print(f"Error loading color filter settings for {roi.name}: {e}")
-
-    def apply_color_filter_settings(self):
-        """Applies the UI settings to the selected in-memory ROI object."""
-        roi = self.get_selected_roi_object()
-        if not roi:
-            messagebox.showwarning("Warning", "No ROI selected to apply settings to.", parent=self.app.master)
-            return
-
-        try:
-            roi.color_filter_enabled = self.color_widgets['enabled_var'].get()
-            hex_color = self.color_widgets['target_color_var'].get()
-            roi.target_color = ROI.hex_to_rgb(hex_color) # Store as RGB tuple
-            roi.color_threshold = self.color_widgets['threshold_var'].get()
-
-            # Update the listbox display immediately
-            self.update_roi_list()
-
-            self.app.update_status(f"Color filter settings updated for '{roi.name}'. (Save ROIs to persist)")
-            print(f"Applied in-memory color settings for {roi.name}: enabled={roi.color_filter_enabled}, color={roi.target_color}, thresh={roi.color_threshold}")
-
-        except tk.TclError:
-             messagebox.showerror("Error", "Could not read settings from UI (widgets might be destroyed).", parent=self.app.master)
-        except Exception as e:
-             messagebox.showerror("Error", f"Failed to apply color filter settings: {e}", parent=self.app.master)
-
-    def pick_color(self):
-        """Opens a color chooser dialog to select the target color."""
-        roi = self.get_selected_roi_object()
-        if not roi: return
-
-        initial_color_hex = self.color_widgets['target_color_var'].get()
-        try:
-             # askcolor returns ((r,g,b), hex) or (None, None)
-             color_code = colorchooser.askcolor(title="Choose Target Color",
-                                                initialcolor=initial_color_hex,
-                                                parent=self.app.master)
-             if color_code and color_code[1]: # Check if a color was chosen (hex is not None)
-                 new_hex_color = color_code[1]
-                 self.color_widgets['target_color_var'].set(new_hex_color)
-                 self.color_widgets['target_color_label'].config(background=new_hex_color)
-                 # Optionally apply immediately to the ROI object, or wait for "Apply" button
-                 # roi.target_color = ROI.hex_to_rgb(new_hex_color)
-                 # print(f"Color picked for {roi.name}: {new_hex_color}")
-        except Exception as e:
-             messagebox.showerror("Color Picker Error", f"Failed to open color picker: {e}", parent=self.app.master)
-
-    def pick_color_from_screen(self):
-        """Starts the screen color picking process."""
-        roi = self.get_selected_roi_object()
-        if not roi:
-            messagebox.showwarning("Warning", "Select an ROI first.", parent=self.app.master)
-            return
-
-        self.app.update_status("Screen Color Picker: Click anywhere on screen (Esc to cancel).")
-        # Hide the main window temporarily to avoid picking from it? Optional.
-        # self.app.master.withdraw()
-        picker = ScreenColorPicker(self.app.master)
-        picker.grab_color(self._on_screen_color_picked)
-
-    def _on_screen_color_picked(self, color_rgb):
-        """Callback function after screen color is picked."""
-        # Restore main window if it was hidden
-        # self.app.master.deiconify()
-
-        if color_rgb:
-            roi = self.get_selected_roi_object()
-            if roi:
-                hex_color = ROI.rgb_to_hex(color_rgb)
-                self.color_widgets['target_color_var'].set(hex_color)
-                self.color_widgets['target_color_label'].config(background=hex_color)
-                # Apply immediately or wait for Apply button? Let's wait.
-                # roi.target_color = color_rgb
-                self.app.update_status(f"Screen color picked: {hex_color}. Apply settings if desired.")
-                print(f"Screen color picked for {roi.name}: {color_rgb} -> {hex_color}")
-            else:
-                 self.app.update_status("Screen color picked, but no ROI selected.")
-        else:
-            self.app.update_status("Screen color picking cancelled.")
-
-    def show_original_preview(self):
-        """Shows a preview of the original selected ROI content."""
-        self._show_preview(filtered=False)
-
-    def show_filtered_preview(self):
-        """Shows a preview of the selected ROI after color filtering."""
-        roi = self.get_selected_roi_object()
-        if roi and not roi.color_filter_enabled:
-             messagebox.showinfo("Info", "Color filtering is not enabled for this ROI.", parent=self.app.master)
-             # Optionally, still show the original if filter is off
-             # self._show_preview(filtered=False)
-             return
-        self._show_preview(filtered=True)
-
-    def _show_preview(self, filtered=False):
-        """Helper function to generate and show ROI previews."""
-        roi = self.get_selected_roi_object()
-        if not roi:
-            messagebox.showwarning("Warning", "No ROI selected.", parent=self.app.master)
-            return
-
-        # Get the source frame (prefer snapshot if available and in use)
-        source_frame = None
-        if self.app.using_snapshot and self.app.snapshot_frame is not None:
-            source_frame = self.app.snapshot_frame
-        elif self.app.current_frame is not None:
-             source_frame = self.app.current_frame
-        elif self.app.selected_hwnd:
-             # Try to capture a single frame if none is available
-             self.app.update_status("Capturing frame for preview...")
-             source_frame = self.app.capture_window(self.app.selected_hwnd)
-             if source_frame is not None:
-                 self.app.current_frame = source_frame # Store it
-                 self.app.update_status("Frame captured for preview.")
-             else:
-                  self.app.update_status("Failed to capture frame for preview.")
-
-        if source_frame is None:
-            messagebox.showerror("Error", "No frame available to generate preview.", parent=self.app.master)
-            return
-
-        roi_img = roi.extract_roi(source_frame)
-        if roi_img is None:
-             messagebox.showerror("Error", f"Could not extract ROI '{roi.name}' from frame.", parent=self.app.master)
-             return
-
-        preview_img = roi_img
-        title_suffix = "Original"
-        if filtered:
-            # Apply the *current UI settings* for preview, not necessarily saved ones
-            try:
-                 temp_roi = ROI("temp", 0,0,1,1) # Create dummy ROI to hold current UI settings
-                 temp_roi.color_filter_enabled = self.color_widgets['enabled_var'].get()
-                 temp_roi.target_color = ROI.hex_to_rgb(self.color_widgets['target_color_var'].get())
-                 temp_roi.color_threshold = self.color_widgets['threshold_var'].get()
-
-                 preview_img = temp_roi.apply_color_filter(roi_img.copy()) # Apply filter to a copy
-                 title_suffix = f"Filtered (Color: {ROI.rgb_to_hex(temp_roi.target_color)}, Thresh: {temp_roi.color_threshold})"
-                 if preview_img is None: # apply_color_filter might return None on error
-                      messagebox.showerror("Error", "Failed to apply color filter for preview.", parent=self.app.master)
-                      return
-            except Exception as e:
-                 messagebox.showerror("Error", f"Error applying filter for preview: {e}", parent=self.app.master)
-                 return
-
-        # Convert BGR (OpenCV) to RGB for display
-        try:
-             preview_img_rgb = cv2.cvtColor(preview_img, cv2.COLOR_BGR2RGB)
-        except cv2.error as e:
-             messagebox.showerror("Preview Error", f"Failed to convert image for display: {e}", parent=self.app.master)
-             return
-
-        # Create and show the preview window
-        PreviewWindow(self.app.master, f"ROI Preview: {roi.name} - {title_suffix}", preview_img_rgb)
-
-
-    # --- Other methods (update_roi_list, save_rois, move, delete, configure_overlay) ---
-
-    def on_roi_selection_toggled(self, active):
-        # This method remains largely the same
-        if active:
-            self.create_roi_btn.config(text="Cancel Define")
-            self.app.update_status("ROI selection active. Drag on preview.")
-            self.app.master.config(cursor="crosshair")
-        else:
-            self.create_roi_btn.config(text="Define ROI")
-            self.app.master.config(cursor="")
-            # Reset color filter UI if selection is cancelled without choosing an ROI
-            # self.on_roi_selected() # Re-evaluates based on current selection
-
-    def update_roi_list(self):
-        # This method needs to be updated to show color filter status
-        current_selection_index = self.roi_listbox.curselection()
-        selected_text = self.roi_listbox.get(current_selection_index[0]) if current_selection_index else None
-
-        self.roi_listbox.delete(0, tk.END)
-        for roi in self.app.rois:
-            if roi.name == SNIP_ROI_NAME:
-                continue
-
-            # Get overlay status
-            overlay_config = get_overlay_config_for_roi(roi.name)
-            is_overlay_enabled = overlay_config.get('enabled', False) # Default to False if not set? Check defaults. Let's assume default is True from settings.py
-            overlay_prefix = "[O]" if is_overlay_enabled else "[ ]"
-
-            # Get color filter status
-            color_prefix = "[C]" if roi.color_filter_enabled else "[ ]"
-
-            self.roi_listbox.insert(tk.END, f"{overlay_prefix}{color_prefix} {roi.name}") # Note the space
-
-        new_idx_to_select = -1
-        if selected_text:
-            # Find the index based on the text *after* the prefixes
-            selected_name = selected_text.split("]")[-1].strip()
-            all_names_in_listbox = [item.split("]")[-1].strip() for item in self.roi_listbox.get(0, tk.END)]
-            try:
-                new_idx_to_select = all_names_in_listbox.index(selected_name)
-            except ValueError:
-                pass # Name not found (e.g., after deletion)
-
-        if new_idx_to_select != -1:
-            self.roi_listbox.selection_clear(0, tk.END) # Clear previous selection visually
-            self.roi_listbox.selection_set(new_idx_to_select)
-            self.roi_listbox.activate(new_idx_to_select)
-            self.roi_listbox.see(new_idx_to_select) # Ensure visible
-
-        # Update related UI elements
-        if hasattr(self.app, 'overlay_tab') and self.app.overlay_tab.frame.winfo_exists():
-            self.app.overlay_tab.update_roi_list() # Update overlay tab's dropdown too
-
-        self.on_roi_selected() # Update button states and color filter UI
-
-    def save_rois_for_current_game(self):
-        # This method remains the same, but now saves the updated ROI objects
-        if not self.app.selected_hwnd:
-            messagebox.showwarning("Save ROIs", "No game window selected.", parent=self.app.master)
-            return
-        # Include all ROIs, even if empty, to allow clearing config
-        rois_to_save = [roi for roi in self.app.rois if roi.name != SNIP_ROI_NAME]
-        # if not rois_to_save:
-        #     # Allow saving empty list
-        #     if not messagebox.askyesno("Save ROIs", "No actual game ROIs defined. Save empty config for this game?", parent=self.app.master):
-        #          return
-
-        saved_path = save_rois(rois_to_save, self.app.selected_hwnd) # save_rois uses roi.to_dict()
-        if saved_path is not None: # Check for None, as save_rois can return None on error
-            self.app.config_file = saved_path
-            self.app.update_status(f"Saved {len(rois_to_save)} ROIs for current game.")
-            self.app.master.title(f"Visual Novel Translator - {os.path.basename(saved_path)}")
-        else:
-            # Error message already shown by save_rois
-            self.app.update_status("Failed to save ROIs for current game.")
-
-    def move_roi_up(self):
-        # Logic remains the same, operates on self.app.rois list
-        selection = self.roi_listbox.curselection()
-        if not selection or selection[0] == 0:
-            return
-        idx_in_listbox = selection[0]
-        roi = self.get_selected_roi_object()
-        if not roi: return
-
-        try:
-            idx_in_app_list = self.app.rois.index(roi)
-            # Find the previous non-SNIP ROI index
-            prev_app_idx = idx_in_app_list - 1
-            while prev_app_idx >= 0 and self.app.rois[prev_app_idx].name == SNIP_ROI_NAME:
-                prev_app_idx -= 1
-            if prev_app_idx < 0: # Already at the top (ignoring SNIP)
-                return
-
-            # Swap in the app's list
-            self.app.rois[idx_in_app_list], self.app.rois[prev_app_idx] = self.app.rois[prev_app_idx], self.app.rois[idx_in_app_list]
-
-            self.update_roi_list() # Rebuild listbox from the updated app list
-            # Try to re-select the moved item
-            listbox_items = self.roi_listbox.get(0, tk.END)
-            target_text = f"[{'O' if get_overlay_config_for_roi(roi.name).get('enabled', True) else ' '}]" \
-                          f"[{'C' if roi.color_filter_enabled else ' '}] {roi.name}"
-            try:
-                 new_idx_in_listbox = list(listbox_items).index(target_text)
-                 self.roi_listbox.selection_set(new_idx_in_listbox)
-                 self.roi_listbox.activate(new_idx_in_listbox)
-            except ValueError:
-                 pass # Item not found? Should not happen.
-            self.on_roi_selected() # Update button states
-        except (ValueError, IndexError) as e:
-            print(f"Error finding ROI for move up: {e}")
-
-
-    def move_roi_down(self):
-        # Logic remains the same, operates on self.app.rois list
-        selection = self.roi_listbox.curselection()
-        if not selection: return
-        idx_in_listbox = selection[0]
-        if idx_in_listbox >= self.roi_listbox.size() - 1: return # Already at bottom
-
-        roi = self.get_selected_roi_object()
-        if not roi: return
-
-        try:
-            idx_in_app_list = self.app.rois.index(roi)
-             # Find the next non-SNIP ROI index
-            next_app_idx = idx_in_app_list + 1
-            while next_app_idx < len(self.app.rois) and self.app.rois[next_app_idx].name == SNIP_ROI_NAME:
-                next_app_idx += 1
-            if next_app_idx >= len(self.app.rois): # Already at the bottom (ignoring SNIP)
-                return
-
-            # Swap in the app's list
-            self.app.rois[idx_in_app_list], self.app.rois[next_app_idx] = self.app.rois[next_app_idx], self.app.rois[idx_in_app_list]
-
-            self.update_roi_list() # Rebuild listbox
-            # Try to re-select
-            listbox_items = self.roi_listbox.get(0, tk.END)
-            target_text = f"[{'O' if get_overlay_config_for_roi(roi.name).get('enabled', True) else ' '}]" \
-                          f"[{'C' if roi.color_filter_enabled else ' '}] {roi.name}"
-            try:
-                 new_idx_in_listbox = list(listbox_items).index(target_text)
-                 self.roi_listbox.selection_set(new_idx_in_listbox)
-                 self.roi_listbox.activate(new_idx_in_listbox)
-            except ValueError:
-                 pass
-            self.on_roi_selected()
-        except (ValueError, IndexError) as e:
-            print(f"Error finding ROI for move down: {e}")
-
-    def delete_selected_roi(self):
-        # Logic remains largely the same
-        roi = self.get_selected_roi_object()
-        if not roi: return
-        if roi.name == SNIP_ROI_NAME: return # Should not be possible via UI
-
-        confirm = messagebox.askyesno("Delete ROI", f"Delete ROI '{roi.name}'?", parent=self.app.master)
-        if not confirm: return
-
-        # Remove from app list
-        self.app.rois.remove(roi)
-
-        # Remove associated overlay settings (if any)
-        all_overlay_settings = get_setting("overlay_settings", {})
-        if roi.name in all_overlay_settings:
-            del all_overlay_settings[roi.name]
-            update_settings({"overlay_settings": all_overlay_settings}) # Save updated settings
-
-        # Destroy live overlay window
-        if hasattr(self.app, 'overlay_manager'):
-            self.app.overlay_manager.destroy_overlay(roi.name)
-
-        # Clear related text data
-        if roi.name in self.app.text_history: del self.app.text_history[roi.name]
-        if roi.name in self.app.stable_texts: del self.app.stable_texts[roi.name]
-
-        # Update UI elements that show text
-        def safe_update(widget_name, update_method, data):
-            widget = getattr(self.app, widget_name, None)
-            if widget and hasattr(widget, 'frame') and widget.frame.winfo_exists():
-                try: update_method(data)
-                except tk.TclError: pass
-                except Exception as e: print(f"Error updating {widget_name} after delete: {e}")
-
-        safe_update('text_tab', self.app.text_tab.update_text, self.app.text_history)
-        safe_update('stable_text_tab', self.app.stable_text_tab.update_text, self.app.stable_texts)
-
-        # Refresh ROI list UI
-        self.update_roi_list()
-        self.app.update_status(f"ROI '{roi.name}' deleted. (Save ROIs to persist)")
-
-    def configure_selected_overlay(self):
-        # Logic remains the same
-        roi = self.get_selected_roi_object()
-        if not roi: return
-
-        if not hasattr(self.app, 'overlay_tab') or not self.app.overlay_tab.frame.winfo_exists():
-            messagebox.showerror("Error", "Overlay tab not available.", parent=self.app.master)
-            return
-
-        try:
-            overlay_tab_widget = self.app.overlay_tab.frame
-            notebook_widget = overlay_tab_widget.master
-            if not isinstance(notebook_widget, ttk.Notebook):
-                raise tk.TclError("Parent not Notebook")
-
-            # Switch to the Overlay tab
-            notebook_widget.select(overlay_tab_widget)
-
-            # Select the correct ROI in the overlay tab's combobox
-            if hasattr(self.app.overlay_tab, 'roi_names_for_combo') and roi.name in self.app.overlay_tab.roi_names_for_combo:
-                self.app.overlay_tab.selected_roi_var.set(roi.name)
-                self.app.overlay_tab.load_roi_config() # Load its config into the UI
-            else:
-                print(f"ROI '{roi.name}' not found in Overlay Tab combo after switch.")
-
-        except (tk.TclError, AttributeError) as e:
-            print(f"Error switching to overlay tab: {e}")
-            messagebox.showerror("Error", "Could not switch to Overlay tab.", parent=self.app.master)
-        except Exception as e:
-            print(f"Unexpected error configuring overlay: {e}")
-
-
-# --- END OF FILE roi_tab.py ---
 ```
 
-**4. `app.py` (Updated)**
+--- END OF FILE utils/ocr.py ---
+
+--- START OF FILE ui/capture_tab.py ---
+
+```python
+import tkinter as tk
+from tkinter import ttk
+from ui.base import BaseTab
+from utils.capture import get_windows, get_window_title
+from utils.settings import get_setting, set_setting
+from utils.ocr import _windows_ocr_available # Import check function
+
+class CaptureTab(BaseTab):
+    OCR_LANGUAGES = ["jpn", "jpn_vert", "eng", "chi_sim", "chi_tra", "kor"]
+    # Define available engines
+    OCR_ENGINES = ["paddle", "easyocr"]
+    if _windows_ocr_available: # Conditionally add Windows OCR
+        OCR_ENGINES.append("windows")
+
+    def setup_ui(self):
+        capture_frame = ttk.LabelFrame(self.frame, text="Capture Settings", padding="10")
+        capture_frame.pack(fill=tk.X, pady=10)
+
+        # --- Window Selection ---
+        win_frame = ttk.Frame(capture_frame)
+        win_frame.pack(fill=tk.X)
+        ttk.Label(win_frame, text="Visual Novel Window:").pack(anchor=tk.W)
+        self.window_var = tk.StringVar()
+        self.window_combo = ttk.Combobox(win_frame, textvariable=self.window_var, width=50, state="readonly")
+        self.window_combo.pack(fill=tk.X, pady=(5, 0))
+        self.window_combo.bind("<<ComboboxSelected>>", self.on_window_selected)
+
+        # --- Capture Buttons ---
+        btn_frame = ttk.Frame(capture_frame)
+        btn_frame.pack(fill=tk.X, pady=(5, 10))
+        self.refresh_btn = ttk.Button(btn_frame, text="Refresh List",
+                                      command=self.refresh_window_list)
+        self.refresh_btn.pack(side=tk.LEFT, padx=(0, 5))
+        self.start_btn = ttk.Button(btn_frame, text="Start Capture",
+                                    command=self.app.start_capture)
+        self.start_btn.pack(side=tk.LEFT, padx=5)
+        self.stop_btn = ttk.Button(btn_frame, text="Stop Capture",
+                                   command=self.app.stop_capture, state=tk.DISABLED)
+        self.stop_btn.pack(side=tk.LEFT, padx=5)
+        self.snapshot_btn = ttk.Button(btn_frame, text="Take Snapshot",
+                                       command=self.app.take_snapshot, state=tk.DISABLED)
+        self.snapshot_btn.pack(side=tk.LEFT, padx=5)
+        self.live_view_btn = ttk.Button(btn_frame, text="Return to Live",
+                                        command=self.app.return_to_live, state=tk.DISABLED)
+        self.live_view_btn.pack(side=tk.LEFT, padx=5)
+
+        # --- OCR Settings Frame ---
+        ocr_frame = ttk.Frame(capture_frame)
+        ocr_frame.pack(fill=tk.X, pady=(10, 5))
+
+        # OCR Engine Selection
+        ttk.Label(ocr_frame, text="OCR Engine:").pack(side=tk.LEFT, anchor=tk.W, padx=(0, 5))
+        self.engine_var = tk.StringVar()
+        self.engine_combo = ttk.Combobox(ocr_frame, textvariable=self.engine_var, width=12,
+                                         values=self.OCR_ENGINES, state="readonly")
+        default_engine = get_setting("ocr_engine", "paddle")
+        if default_engine in self.OCR_ENGINES:
+            self.engine_combo.set(default_engine)
+        elif self.OCR_ENGINES:
+            self.engine_combo.current(0) # Default to first available
+        self.engine_combo.pack(side=tk.LEFT, anchor=tk.W, padx=5)
+        self.engine_combo.bind("<<ComboboxSelected>>", self.on_engine_selected)
+
+        # OCR Language Selection
+        ttk.Label(ocr_frame, text="Language:").pack(side=tk.LEFT, anchor=tk.W, padx=(15, 5)) # Added spacing
+        self.lang_var = tk.StringVar()
+        self.lang_combo = ttk.Combobox(ocr_frame, textvariable=self.lang_var, width=10,
+                                       values=self.OCR_LANGUAGES, state="readonly")
+        default_lang = get_setting("ocr_language", "jpn")
+        if default_lang in self.OCR_LANGUAGES:
+            self.lang_combo.set(default_lang)
+        elif self.OCR_LANGUAGES:
+            self.lang_combo.current(0)
+        self.lang_combo.pack(side=tk.LEFT, anchor=tk.W, padx=5)
+        self.lang_combo.bind("<<ComboboxSelected>>", self.on_language_changed)
+
+        # --- Status Label ---
+        self.status_label = ttk.Label(capture_frame, text="Status: Ready")
+        self.status_label.pack(fill=tk.X, pady=(10, 0), anchor=tk.W)
+
+        # Initial population
+        self.refresh_window_list()
+
+    def refresh_window_list(self):
+        self.app.update_status("Refreshing window list...")
+        self.window_combo.config(state=tk.NORMAL)
+        self.window_combo.set("")
+        try:
+            windows = get_windows()
+            filtered_windows = {}
+            app_title = self.app.master.title()
+            for hwnd in windows:
+                title = get_window_title(hwnd)
+                # Basic filtering
+                if title and title != app_title and "Program Manager" not in title and "Default IME" not in title:
+                    filtered_windows[hwnd] = f"{hwnd}: {title}"
+
+            window_titles = list(filtered_windows.values())
+            self.window_handles = list(filtered_windows.keys()) # Store HWNDs in the same order
+            self.window_combo['values'] = window_titles
+
+            if window_titles:
+                last_hwnd = self.app.selected_hwnd
+                # Try to re-select the previously selected window if it still exists
+                if last_hwnd and last_hwnd in self.window_handles:
+                    try:
+                        idx = self.window_handles.index(last_hwnd)
+                        self.window_combo.current(idx)
+                    except ValueError:
+                        # Handle case where HWND exists but somehow index fails (shouldn't happen)
+                        self.app.selected_hwnd = None
+                        self.app.load_rois_for_hwnd(None)
+                elif self.app.selected_hwnd: # If previous HWND is no longer valid
+                    self.app.selected_hwnd = None
+                    self.app.load_rois_for_hwnd(None)
+
+                self.app.update_status(f"Found {len(window_titles)} windows. Select one.")
+            else:
+                self.app.update_status("No suitable windows found.")
+                if self.app.selected_hwnd: # Clear selection if no windows found
+                    self.app.selected_hwnd = None
+                    self.app.load_rois_for_hwnd(None)
+
+            self.window_combo.config(state="readonly") # Set back to readonly after update
+
+        except Exception as e:
+            self.app.update_status(f"Error refreshing windows: {e}")
+            self.window_combo.config(state="readonly") # Ensure readonly on error
+
+    def on_window_selected(self, event=None):
+        try:
+            selected_index = self.window_combo.current()
+            if 0 <= selected_index < len(self.window_handles):
+                new_hwnd = self.window_handles[selected_index]
+                if new_hwnd != self.app.selected_hwnd:
+                    self.app.selected_hwnd = new_hwnd
+                    title = self.window_combo.get().split(":", 1)[-1].strip()
+                    self.app.update_status(f"Window selected: {title}")
+                    print(f"Selected window HWND: {self.app.selected_hwnd}")
+                    # Load ROIs and context specific to this window
+                    self.app.load_rois_for_hwnd(new_hwnd)
+                    # If capture was running, maybe notify user to restart?
+                    if self.app.capturing:
+                        self.app.update_status(f"Window changed to {title}. Restart capture if needed.")
+            else:
+                # Handle case where selection is somehow invalid
+                if self.app.selected_hwnd is not None:
+                    self.app.selected_hwnd = None
+                    self.app.update_status("No window selected.")
+                    self.app.load_rois_for_hwnd(None)
+        except Exception as e:
+            # General error handling
+            self.app.selected_hwnd = None
+            self.app.update_status(f"Error selecting window: {e}")
+            self.app.load_rois_for_hwnd(None)
+
+    def on_engine_selected(self, event=None):
+        """Handles selection of a new OCR engine."""
+        new_engine = self.engine_var.get()
+        if new_engine in self.OCR_ENGINES:
+            print(f"OCR Engine selection changed to: {new_engine}")
+            set_setting("ocr_engine", new_engine)
+            # Trigger the app to update/initialize the selected engine
+            # Pass the currently selected language as well
+            current_lang = self.lang_var.get() or "jpn"
+            self.app.set_ocr_engine(new_engine, current_lang)
+        else:
+            self.app.update_status("Invalid OCR engine selected.")
+
+    def on_language_changed(self, event=None):
+        """Handles selection of a new OCR language."""
+        new_lang = self.lang_var.get()
+        if new_lang in self.OCR_LANGUAGES:
+            print(f"OCR Language changed to: {new_lang}")
+            set_setting("ocr_language", new_lang)
+            # Trigger the app to update the OCR engine with the new language
+            # Pass the currently selected engine type
+            current_engine = self.engine_var.get() or "paddle"
+            self.app.update_ocr_language(new_lang, current_engine)
+        else:
+            self.app.update_status("Invalid language selected.")
+
+    def update_status(self, message):
+        """Updates the status label text."""
+        self.status_label.config(text=f"Status: {message}")
+
+    # --- State Update Callbacks from App ---
+    def on_capture_started(self):
+        self.start_btn.config(state=tk.DISABLED)
+        self.refresh_btn.config(state=tk.DISABLED)
+        self.window_combo.config(state=tk.DISABLED)
+        self.stop_btn.config(state=tk.NORMAL)
+        self.snapshot_btn.config(state=tk.NORMAL)
+        self.live_view_btn.config(state=tk.DISABLED) # Cannot return to live if already live
+
+    def on_capture_stopped(self):
+        self.start_btn.config(state=tk.NORMAL)
+        self.refresh_btn.config(state=tk.NORMAL)
+        self.window_combo.config(state="readonly") # Re-enable selection
+        self.stop_btn.config(state=tk.DISABLED)
+        self.snapshot_btn.config(state=tk.DISABLED) # Cannot snapshot if not capturing
+        self.live_view_btn.config(state=tk.DISABLED)
+
+    def on_snapshot_taken(self):
+        # Snapshot implies capture was running, so keep stop/snapshot enabled
+        # self.start_btn.config(state=tk.DISABLED) # Keep disabled
+        # self.refresh_btn.config(state=tk.DISABLED) # Keep disabled
+        # self.window_combo.config(state=tk.DISABLED) # Keep disabled
+        # self.stop_btn.config(state=tk.NORMAL) # Keep enabled
+        # self.snapshot_btn.config(state=tk.NORMAL) # Keep enabled
+        self.live_view_btn.config(state=tk.NORMAL) # Enable returning to live
+
+    def on_live_view_resumed(self):
+        self.live_view_btn.config(state=tk.DISABLED)
+        # Restore state based on whether capture is still active
+        if self.app.capturing:
+            self.snapshot_btn.config(state=tk.NORMAL)
+            # Other buttons should already be in the 'capturing' state
+        else:
+            # If capture somehow stopped while snapshot was active, reset fully
+            self.snapshot_btn.config(state=tk.DISABLED)
+            self.on_capture_stopped()
+
+```
+
+--- END OF FILE ui/capture_tab.py ---
+
+--- START OF FILE app.py ---
 
 ```python
 # --- START OF FILE app.py ---
@@ -904,7 +635,7 @@ import cv2
 from PIL import Image, ImageTk
 import os
 import win32gui
-from paddleocr import PaddleOCR
+
 
 # Utility Imports
 from utils.capture import get_window_title, capture_window, capture_screen_region
@@ -912,6 +643,7 @@ from utils.config import load_rois, ROI_CONFIGS_DIR, _get_game_hash # Use config
 from utils.settings import load_settings, set_setting, get_setting, get_overlay_config_for_roi
 from utils.roi import ROI
 from utils.translation import CACHE_DIR, CONTEXT_DIR, _load_context, translate_text
+import utils.ocr as ocr # Import the refactored ocr module
 
 # UI Imports
 from ui.capture_tab import CaptureTab
@@ -927,7 +659,7 @@ from ui.color_picker import ScreenColorPicker # Import screen color picker
 
 FPS = 10 # Target frames per second for capture loop
 FRAME_DELAY = 1.0 / FPS
-OCR_ENGINE_LOCK = threading.Lock()
+# OCR_ENGINE_LOCK = threading.Lock() # Removed - locking handled within ocr module if needed
 
 
 class VisualNovelTranslatorApp:
@@ -976,9 +708,12 @@ class VisualNovelTranslatorApp:
         self.max_display_height = get_setting("max_display_height", 600) # Max height for canvas image
         self.last_status_message = ""
 
-        # OCR Engine
-        self.ocr = None
+        # OCR Engine State
+        self.ocr_engine_type = get_setting("ocr_engine", "paddle") # Store the selected type
         self.ocr_lang = get_setting("ocr_language", "jpn")
+        self.ocr_engine_ready = False # Flag to track if the current engine is ready
+        self._ocr_init_thread = None # Thread for background initialization
+
         self._resize_job = None # For debouncing canvas resize events
 
         # Setup UI components
@@ -986,9 +721,8 @@ class VisualNovelTranslatorApp:
         self.overlay_manager = OverlayManager(self.master, self)
         self.floating_controls = None
 
-        # Initialize OCR engine and show controls
-        initial_ocr_lang = self.ocr_lang or "jpn"
-        self.update_ocr_engine(initial_ocr_lang, initial_load=True)
+        # Initialize OCR engine (now happens in background)
+        self._trigger_ocr_initialization(self.ocr_engine_type, self.ocr_lang, initial_load=True)
         self.show_floating_controls() # Show floating controls on startup
 
     def _ensure_dirs(self):
@@ -1125,15 +859,15 @@ class VisualNovelTranslatorApp:
             loaded_rois, loaded_path = load_rois(hwnd)
 
             if loaded_path is not None: # A config file was found or load attempt was made
-                 self.rois = loaded_rois # This might be an empty list if file was empty/corrupt
-                 self.config_file = loaded_path
-                 if loaded_rois:
-                     self.update_status(f"Loaded {len(loaded_rois)} ROIs for current game.")
-                     self.master.title(f"Visual Novel Translator - {os.path.basename(loaded_path)}")
-                 else:
-                     # File existed but was empty or invalid
-                     self.update_status("ROI config found but empty/invalid. Define new ROIs.")
-                     self.master.title(f"Visual Novel Translator - {os.path.basename(loaded_path)}")
+                self.rois = loaded_rois # This might be an empty list if file was empty/corrupt
+                self.config_file = loaded_path
+                if loaded_rois:
+                    self.update_status(f"Loaded {len(loaded_rois)} ROIs for current game.")
+                    self.master.title(f"Visual Novel Translator - {os.path.basename(loaded_path)}")
+                else:
+                    # File existed but was empty or invalid
+                    self.update_status("ROI config found but empty/invalid. Define new ROIs.")
+                    self.master.title(f"Visual Novel Translator - {os.path.basename(loaded_path)}")
 
             else: # No config file found for this game
                 if self.rois: # Clear if switching from a game that had ROIs
@@ -1196,50 +930,68 @@ class VisualNovelTranslatorApp:
         if hasattr(self, "overlay_manager"):
             self.overlay_manager.clear_all_overlays()
 
-    def update_ocr_engine(self, lang_code, initial_load=False):
-        """Initializes or updates the OCR engine in a separate thread."""
-        def init_engine():
-            global OCR_ENGINE_LOCK
-            # Mapping for PaddleOCR language codes
-            lang_map = {
-                "jpn": "japan", "jpn_vert": "japan", "eng": "en",
-                "chi_sim": "ch", "chi_tra": "ch", "kor": "ko",
-            }
-            ocr_lang_paddle = lang_map.get(lang_code, "en") # Default to English
+    def _trigger_ocr_initialization(self, engine_type, lang_code, initial_load=False):
+        """Starts the OCR engine initialization in a background thread."""
+        # Abort if an init thread is already running
+        if self._ocr_init_thread and self._ocr_init_thread.is_alive():
+            print("[OCR Init] Initialization already in progress. Ignoring new request.")
+            return
 
-            # Check if engine exists and language matches
-            with OCR_ENGINE_LOCK:
-                current_paddle_lang = getattr(self.ocr, "lang", None) if self.ocr else None
-                if current_paddle_lang == ocr_lang_paddle and self.ocr is not None:
-                    if not initial_load: print(f"OCR engine already initialized with {lang_code}.")
-                    self.master.after_idle(lambda: self.update_status(f"OCR Ready ({lang_code})."))
-                    return # No change needed
+        self.ocr_engine_ready = False # Mark as not ready until init completes
+        status_msg = f"Initializing OCR ({engine_type}/{lang_code})..."
+        if not initial_load:
+            print(status_msg)
+        self.update_status(status_msg)
 
-            # Update status before potentially long initialization
-            status_msg = f"Initializing OCR ({lang_code})..."
-            if not initial_load: print(status_msg)
-            self.master.after_idle(lambda: self.update_status(status_msg))
-
+        def init_task():
             try:
-                # Initialize PaddleOCR (this can take time)
-                new_ocr_engine = PaddleOCR(use_angle_cls=True, lang=ocr_lang_paddle, show_log=False)
-                # Safely update the instance variable
-                with OCR_ENGINE_LOCK:
-                    self.ocr = new_ocr_engine
-                    self.ocr_lang = lang_code # Store the requested code (e.g., 'jpn_vert')
-                print(f"OCR engine ready for {lang_code}.")
-                self.master.after_idle(lambda: self.update_status(f"OCR Ready ({lang_code})."))
+                # Call the extract_text function with a dummy image just to trigger initialization
+                # This relies on the caching/initialization logic within ocr.py
+                dummy_img = np.zeros((10, 10, 3), dtype=np.uint8) # Small dummy image
+                ocr.extract_text(dummy_img, lang=lang_code, engine_type=engine_type)
+                # If no exception, initialization was successful (or already done)
+                self.ocr_engine_ready = True
+                success_msg = f"OCR Ready ({engine_type}/{lang_code})."
+                print(success_msg)
+                self.master.after_idle(lambda: self.update_status(success_msg))
             except Exception as e:
-                print(f"!!! Error initializing PaddleOCR for lang {lang_code}: {e}")
-                import traceback
-                traceback.print_exc()
-                self.master.after_idle(lambda: self.update_status(f"OCR Error ({lang_code}): Check console"))
-                # Ensure ocr is None on failure
-                with OCR_ENGINE_LOCK:
-                    self.ocr = None
+                self.ocr_engine_ready = False
+                error_msg = f"OCR Error ({engine_type}/{lang_code}): {str(e)[:60]}..."
+                print(f"!!! Error during OCR initialization thread: {e}")
+                # import traceback # Optional: uncomment for full trace
+                # traceback.print_exc()
+                self.master.after_idle(lambda: self.update_status(error_msg))
 
-        # Start initialization in a background thread to avoid freezing the UI
-        threading.Thread(target=init_engine, daemon=True).start()
+        self._ocr_init_thread = threading.Thread(target=init_task, daemon=True)
+        self._ocr_init_thread.start()
+
+    def set_ocr_engine(self, engine_type, lang_code):
+        """Sets the desired OCR engine and triggers initialization."""
+        if engine_type == self.ocr_engine_type:
+            print(f"OCR engine already set to {engine_type}.")
+            # Still might need re-init if language changed implicitly, trigger anyway
+            self._trigger_ocr_initialization(engine_type, lang_code)
+            return
+
+        print(f"Setting OCR engine to: {engine_type}")
+        self.ocr_engine_type = engine_type
+        set_setting("ocr_engine", engine_type) # Save preference
+        self._trigger_ocr_initialization(engine_type, lang_code)
+
+    def update_ocr_language(self, lang_code, engine_type):
+        """Sets the desired OCR language and triggers engine re-initialization."""
+        if lang_code == self.ocr_lang and self.ocr_engine_ready:
+             # Check if the current *engine* matches the requested one too
+             if engine_type == self.ocr_engine_type:
+                 print(f"OCR language already set to {lang_code} for engine {engine_type}.")
+                 return # No change needed if engine is ready and matches
+
+        print(f"Setting OCR language to: {lang_code} for engine {engine_type}")
+        self.ocr_lang = lang_code
+        set_setting("ocr_language", lang_code) # Save preference
+        # Always trigger re-initialization when language changes, using the current engine type
+        self._trigger_ocr_initialization(engine_type, lang_code)
+
 
     def update_stable_threshold(self, new_value):
         """Updates the stability threshold from UI controls."""
@@ -1255,9 +1007,9 @@ class VisualNovelTranslatorApp:
                     else:
                         self.update_status("Error saving stability threshold.")
             else:
-                 print(f"Ignored invalid threshold value: {new_threshold}")
+                print(f"Ignored invalid threshold value: {new_threshold}")
         except (ValueError, TypeError):
-             print(f"Ignored non-numeric threshold value: {new_value}")
+            print(f"Ignored non-numeric threshold value: {new_value}")
 
     def start_capture(self):
         """Starts the main capture and processing loop."""
@@ -1269,17 +1021,14 @@ class VisualNovelTranslatorApp:
         # Ensure ROIs are loaded for the selected game
         if not self.rois and self.selected_hwnd:
             self.load_rois_for_hwnd(self.selected_hwnd)
-            # If still no ROIs after loading, maybe warn? Depends on desired behavior.
-            # if not self.rois:
-            #    messagebox.showinfo("Info", "No ROIs defined for this game. Capture started, but no text will be extracted.", parent=self.master)
 
         # Check if OCR engine is ready
-        with OCR_ENGINE_LOCK: ocr_ready = bool(self.ocr)
-        if not ocr_ready:
-            current_lang = self.ocr_lang or "jpn"
-            self.update_ocr_engine(current_lang) # Trigger initialization if not ready
-            messagebox.showinfo("OCR Not Ready", "OCR is initializing... Capture will start, but text extraction may be delayed.", parent=self.master)
-            # Allow capture to start anyway, OCR will be used when ready
+        if not self.ocr_engine_ready:
+            # If not ready, trigger initialization again and inform user
+            self._trigger_ocr_initialization(self.ocr_engine_type, self.ocr_lang)
+            messagebox.showinfo("OCR Not Ready", f"OCR ({self.ocr_engine_type}/{self.ocr_lang}) is initializing... Capture will start, but text extraction may be delayed.", parent=self.master)
+        # else:
+            # print(f"OCR engine ({self.ocr_engine_type}/{self.ocr_lang}) is ready.")
 
         # If currently viewing a snapshot, return to live view first
         if self.using_snapshot: self.return_to_live()
@@ -1343,9 +1092,9 @@ class VisualNovelTranslatorApp:
         # Check if there's a frame to snapshot
         if self.current_frame is None:
             if self.capturing:
-                 messagebox.showwarning("Warning", "Waiting for first frame to capture.", parent=self.master)
+                messagebox.showwarning("Warning", "Waiting for first frame to capture.", parent=self.master)
             else:
-                 messagebox.showwarning("Warning", "Start capture or select window first.", parent=self.master)
+                messagebox.showwarning("Warning", "Start capture or select window first.", parent=self.master)
             return
 
         print("Taking snapshot...")
@@ -1407,8 +1156,8 @@ class VisualNovelTranslatorApp:
                 self.take_snapshot()
             # If still not using snapshot (e.g., snapshot failed), abort
             if not self.using_snapshot:
-                 print("Failed to enter snapshot mode for ROI definition.")
-                 return
+                print("Failed to enter snapshot mode for ROI definition.")
+                return
 
             # --- Activate ROI selection mode ---
             self.roi_selection_active = True
@@ -1436,10 +1185,11 @@ class VisualNovelTranslatorApp:
             return
 
         # Check OCR readiness
-        with OCR_ENGINE_LOCK:
-            if not self.ocr:
-                messagebox.showwarning("OCR Not Ready", "OCR engine not initialized. Cannot use Snip & Translate.", parent=self.master)
-                return
+        if not self.ocr_engine_ready:
+            messagebox.showwarning("OCR Not Ready", f"OCR engine ({self.ocr_engine_type}/{self.ocr_lang}) not initialized. Cannot use Snip & Translate.", parent=self.master)
+            # Optionally trigger initialization again
+            # self._trigger_ocr_initialization(self.ocr_engine_type, self.ocr_lang)
+            return
 
         print("Starting Snip & Translate mode...")
         self.snip_mode_active = True
@@ -1493,12 +1243,16 @@ class VisualNovelTranslatorApp:
 
         # Get start coordinates (relative to canvas)
         try:
-             start_x_canvas, start_y_canvas = self.snip_canvas.coords(self.snip_rect_id)[:2]
-        except (tk.TclError, IndexError):
-             # Failsafe if rect_id is somehow invalid
-             self.snip_rect_id = None
-             self.snip_start_coords = None
-             return
+            # Use the stored screen coordinates for start point
+            sx_root, sy_root = self.snip_start_coords
+            # Convert start screen coords to current overlay's canvas coords
+            start_x_canvas = sx_root - self.snip_overlay.winfo_rootx()
+            start_y_canvas = sy_root - self.snip_overlay.winfo_rooty()
+        except (tk.TclError, TypeError):
+            # Failsafe if overlay gone or coords invalid
+            self.snip_rect_id = None
+            self.snip_start_coords = None
+            return
 
         # Update rectangle coordinates with current mouse position (canvas coordinates)
         try:
@@ -1603,160 +1357,125 @@ class VisualNovelTranslatorApp:
                 self.master.after_idle(lambda: self.update_status("Snip Error: Failed to capture region."))
                 return
 
-            # 2. Perform OCR
-            with OCR_ENGINE_LOCK: ocr_engine_instance = self.ocr
-            if not ocr_engine_instance:
-                self.master.after_idle(lambda: self.update_status("Snip Error: OCR engine not ready."))
+            # 2. Perform OCR (using the currently selected engine and language)
+            if not self.ocr_engine_ready:
+                self.master.after_idle(lambda: self.update_status(f"Snip Error: OCR ({self.ocr_engine_type}/{self.ocr_lang}) not ready."))
                 return
 
-            print("[Snip OCR] Running OCR...")
-            # Apply color filtering if configured for the special SNIP_ROI_NAME
-            # (We need a way to configure this, maybe via OverlayTab?)
-            # For now, assume no filtering for snip.
-            # If filtering was desired:
-            # snip_roi_config = get_overlay_config_for_roi(SNIP_ROI_NAME) # This gets overlay config... need ROI config
-            # temp_roi = ROI(SNIP_ROI_NAME, 0,0,1,1) # Dummy ROI to hold filter settings
-            # temp_roi.color_filter_enabled = get_setting(...) # Need a way to get snip filter settings
-            # temp_roi.target_color = ...
-            # temp_roi.color_threshold = ...
-            # img_to_ocr = temp_roi.apply_color_filter(img_bgr)
-
-            img_to_ocr = img_bgr # Use original captured image for now
-
-            ocr_result_raw = ocr_engine_instance.ocr(img_to_ocr, cls=True)
-
-            # Extract text from OCR result
-            text_lines = []
-            # Handle potential variations in PaddleOCR output format
-            if ocr_result_raw and isinstance(ocr_result_raw, list) and len(ocr_result_raw) > 0:
-                 # Sometimes result is [[line1], [line2]], sometimes [[[box],[text,conf]],...]
-                 current_result_set = ocr_result_raw[0] if isinstance(ocr_result_raw[0], list) else ocr_result_raw
-                 if current_result_set:
-                     for item in current_result_set:
-                         text_info = None
-                         # Check typical formats: [[box], [text, conf]] or ([text, conf])
-                         if isinstance(item, list) and len(item) >= 2 and isinstance(item[1], (list, tuple)):
-                             text_info = item[1]
-                         elif isinstance(item, tuple) and len(item) >= 2: # Direct text/conf tuple? Less common.
-                             text_info = item
-                         # Extract text if found
-                         if isinstance(text_info, (tuple, list)) and len(text_info) >= 1 and text_info[0]:
-                             text_lines.append(str(text_info[0]))
-
-            extracted_text = " ".join(text_lines).strip()
+            print(f"[Snip OCR] Running OCR ({self.ocr_engine_type}/{self.ocr_lang})...")
+            # Pass engine type and language to the unified extract_text function
+            extracted_text = ocr.extract_text(img_bgr, lang=self.ocr_lang, engine_type=self.ocr_engine_type)
             print(f"[Snip OCR] Extracted: '{extracted_text}'")
+
+            # Check for OCR errors indicated by the function
+            if extracted_text.startswith("[") and "Error]" in extracted_text:
+                 self.master.after_idle(lambda: self.update_status(f"Snip: {extracted_text}"))
+                 self.master.after_idle(lambda: self.display_snip_translation(extracted_text, screen_region))
+                 return
 
             if not extracted_text:
                 self.master.after_idle(lambda: self.update_status("Snip: No text found in region."))
-                # Show "No text found" in the snip result window
                 self.master.after_idle(lambda: self.display_snip_translation("[No text found]", screen_region))
                 return
 
             # 3. Translate the extracted text
-            # Get translation config (API key, model, etc.) from the TranslationTab
             config = self.translation_tab.get_translation_config() if hasattr(self, "translation_tab") else None
             if not config:
                 self.master.after_idle(lambda: self.update_status("Snip Error: Translation config unavailable."))
-                # Display error in snip window
                 self.master.after_idle(lambda: self.display_snip_translation("[Translation Config Error]", screen_region))
                 return
 
-            # Format input for translation function (using a consistent tag)
-            # Use a unique name unlikely to clash with user ROIs
             snip_tag_name = "_snip_translate"
             aggregated_input_snip = f"[{snip_tag_name}]: {extracted_text}"
 
             print("[Snip Translate] Translating...")
-            # Call translation function: skip cache and history for snips
             translation_result = translate_text(
                 aggregated_input_text=aggregated_input_snip,
-                hwnd=None, # No specific game window for snip
+                hwnd=None, # No specific game window for snip cache/context
                 preset=config,
                 target_language=config["target_language"],
-                additional_context=config["additional_context"], # Use global/game context if needed?
-                context_limit=0, # Don't use history for snip
-                skip_cache=True, # Don't cache snip results
-                skip_history=True, # Don't add snip to history
+                additional_context=config["additional_context"],
+                context_limit=0, # No context history for snips
+                skip_cache=True, # Don't cache snips
+                skip_history=True, # Don't add snips to history
             )
 
             # 4. Process translation result
-            final_text = "[Translation Error]" # Default on failure
+            final_text = "[Translation Error]"
             if isinstance(translation_result, dict):
                 if "error" in translation_result:
                     final_text = f"Error: {translation_result['error']}"
-                # Check for the specific tag we used
                 elif snip_tag_name in translation_result:
                     final_text = translation_result[snip_tag_name]
-                # Fallback if tag mismatch but only one result
-                elif len(translation_result) == 1:
-                     final_text = next(iter(translation_result.values()), "[Parsing Failed]")
+                elif len(translation_result) == 1: # Handle case where tag might be missing but only one result
+                    final_text = next(iter(translation_result.values()), "[Parsing Failed]")
 
             print(f"[Snip Translate] Result: '{final_text}'")
             self.master.after_idle(lambda: self.update_status("Snip translation complete."))
-            # Display the final text in the snip result window
             self.master.after_idle(lambda: self.display_snip_translation(final_text, screen_region))
 
         except Exception as e:
-            # Catch-all for errors during the thread
             error_msg = f"Error processing snip: {e}"
             print(error_msg)
             import traceback
             traceback.print_exc()
             self.master.after_idle(lambda: self.update_status(f"Snip Error: {error_msg[:60]}..."))
-            # Display error in snip window
             self.master.after_idle(lambda: self.display_snip_translation(f"[Error: {error_msg}]", screen_region))
 
     def display_snip_translation(self, text, region):
         """Creates or updates the floating window for snip results."""
-        # Close previous snip window if it exists
+        # Close existing snip window if open
         if self.current_snip_window and self.current_snip_window.winfo_exists():
             try: self.current_snip_window.destroy_window()
             except tk.TclError: pass
         self.current_snip_window = None
 
         try:
-            # Get appearance settings for the special snip window
-            # These are configured via the OverlayTab using the SNIP_ROI_NAME
+            # Get the specific configuration for the snip window
             snip_config = get_overlay_config_for_roi(SNIP_ROI_NAME)
-            snip_config["enabled"] = True # Ensure it's treated as enabled
+            snip_config["enabled"] = True # Snip window is always enabled when created
 
-            # Create the closable floating window instance
+            # Create the closable overlay window
             self.current_snip_window = ClosableFloatingOverlayWindow(
                 self.master,
                 roi_name=SNIP_ROI_NAME, # Use the special name
                 initial_config=snip_config,
-                manager_ref=None # Snip window is independent of the main overlay manager
+                manager_ref=None # Snip window is independent of the manager
             )
 
-            # Calculate position (try bottom-right of snip region, adjust if off-screen)
+            # --- Position the snip window intelligently ---
+            # Default position: to the right of the snipped region
             pos_x = region["left"] + region["width"] + 10
             pos_y = region["top"]
-            self.current_snip_window.update_idletasks() # Ensure window size is calculated
+
+            # Ensure window is fully visible on screen
+            self.current_snip_window.update_idletasks() # Ensure dimensions are calculated
             win_width = self.current_snip_window.winfo_width()
             win_height = self.current_snip_window.winfo_height()
             screen_width = self.master.winfo_screenwidth()
             screen_height = self.master.winfo_screenheight()
 
-            # Adjust if going off right edge
+            # Adjust if it goes off-screen right
             if pos_x + win_width > screen_width:
-                pos_x = region["left"] - win_width - 10
-            # Adjust if going off bottom edge
+                pos_x = region["left"] - win_width - 10 # Try left
+            # Adjust if it goes off-screen bottom
             if pos_y + win_height > screen_height:
-                pos_y = screen_height - win_height - 10
-            # Ensure not off top or left edge
+                pos_y = screen_height - win_height - 10 # Move up
+            # Ensure it doesn't go off-screen top or left
             pos_x = max(0, pos_x)
             pos_y = max(0, pos_y)
 
-            # Set geometry and update text
+            # Apply the calculated position
             self.current_snip_window.geometry(f"+{pos_x}+{pos_y}")
-            # update_text handles making the window visible
-            self.current_snip_window.update_text(text, global_overlays_enabled=True)
+
+            # Update the text and ensure it's visible
+            self.current_snip_window.update_text(text, global_overlays_enabled=True) # Force show
 
         except Exception as e:
             print(f"Error creating snip result window: {e}")
             import traceback
             traceback.print_exc()
-            # Clean up if window creation failed partially
+            # Clean up partially created window if error occurred
             if self.current_snip_window:
                 try: self.current_snip_window.destroy_window()
                 except Exception: pass
@@ -1766,47 +1485,48 @@ class VisualNovelTranslatorApp:
     def capture_process(self):
         """The main loop running in a separate thread for capturing and processing."""
         last_frame_time = time.time()
-        target_sleep_time = FRAME_DELAY # Calculated from FPS
+        target_sleep_time = FRAME_DELAY
         print("Capture thread started.")
 
         while self.capturing:
             loop_start_time = time.time()
-            frame_to_display = None # Frame to be shown on canvas
+            frame_to_display = None
 
             try:
-                # If in snapshot mode, just sleep briefly
+                # If in snapshot mode, just sleep briefly and continue
                 if self.using_snapshot:
-                    time.sleep(0.05)
+                    time.sleep(0.05) # Short sleep to prevent busy-waiting
                     continue
 
                 # Check if the target window is still valid
                 if not self.selected_hwnd or not win32gui.IsWindow(self.selected_hwnd):
                     print("Capture target window lost or invalid. Stopping.")
-                    # Schedule UI update and stop action on main thread
                     self.master.after_idle(self.handle_capture_failure)
                     break # Exit the loop
 
                 # Capture the window content
                 frame = capture_window(self.selected_hwnd)
                 if frame is None:
-                    # Capture failed (e.g., window minimized, protected content)
+                    # Handle capture failure (e.g., window minimized, protected content)
                     print("Warning: capture_window returned None. Retrying...")
-                    time.sleep(0.5) # Wait before retrying
+                    time.sleep(0.5) # Wait a bit longer before retrying
                     continue
 
-                # Store the latest valid frame
+                # Store the latest frame
                 self.current_frame = frame
                 frame_to_display = frame # Use this frame for display update
 
-                # Process ROIs if OCR engine is ready and ROIs are defined
-                with OCR_ENGINE_LOCK: ocr_engine_instance = self.ocr
-                if self.rois and ocr_engine_instance:
-                    # Process ROIs (OCR, stability check, translation trigger)
-                    self._process_rois(frame, ocr_engine_instance)
+                # Process ROIs if OCR is ready and ROIs exist
+                if self.rois and self.ocr_engine_ready:
+                    self._process_rois(frame) # Pass only frame, engine details are instance vars
+                # elif not self.ocr_engine_ready:
+                    # Optional: Log that OCR is still initializing if needed
+                    # print("[Capture Loop] Waiting for OCR engine...")
+                    # pass
 
-                # Update the preview canvas periodically
+                # --- Frame Display Timing ---
+                # Update display roughly at the target FPS
                 current_time = time.time()
-                # Check if enough time has passed since last display update
                 if current_time - last_frame_time >= target_sleep_time:
                     if frame_to_display is not None:
                         # Send a copy to the main thread for display
@@ -1814,17 +1534,16 @@ class VisualNovelTranslatorApp:
                         self.master.after_idle(lambda f=frame_copy: self._display_frame(f))
                     last_frame_time = current_time
 
-                # Calculate sleep duration to maintain target FPS
+                # --- Loop Delay Calculation ---
                 elapsed = time.time() - loop_start_time
-                sleep_duration = max(0.001, target_sleep_time - elapsed)
+                sleep_duration = max(0.001, target_sleep_time - elapsed) # Ensure positive sleep
                 time.sleep(sleep_duration)
 
             except Exception as e:
-                # Catch unexpected errors in the loop
                 print(f"!!! Error in capture loop: {e}")
                 import traceback
                 traceback.print_exc()
-                # Update status bar on main thread
+                # Update status bar from main thread
                 self.master.after_idle(lambda msg=str(e): self.update_status(f"Capture loop error: {msg[:60]}..."))
                 time.sleep(1) # Pause briefly after an error
 
@@ -1832,22 +1551,21 @@ class VisualNovelTranslatorApp:
 
     def handle_capture_failure(self):
         """Called from main thread if capture loop detects window loss."""
-        if self.capturing: # Check if stop hasn't already been initiated
+        if self.capturing: # Only act if we thought we were capturing
             self.update_status("Window lost or uncapturable. Stopping capture.")
             print("Capture target window became invalid.")
-            self.stop_capture() # Initiate the stop process
+            self.stop_capture() # Initiate the stop sequence
 
     def on_canvas_resize(self, event=None):
         """Handles canvas resize events, debouncing redraw."""
-        # Cancel previous resize job if it exists
         if self._resize_job:
             self.master.after_cancel(self._resize_job)
-        # Schedule redraw after a short delay to avoid rapid updates
+        # Schedule the actual redraw after a short delay
         self._resize_job = self.master.after(100, self._perform_resize_redraw)
 
     def _perform_resize_redraw(self):
         """Redraws the frame on the canvas after resizing."""
-        self._resize_job = None # Clear the job ID
+        self._resize_job = None # Reset the job ID
         if not self.canvas.winfo_exists(): return # Check if canvas still exists
 
         # Determine which frame to display (snapshot or live)
@@ -1860,193 +1578,184 @@ class VisualNovelTranslatorApp:
 
         # Clear previous content
         self.canvas.delete("display_content")
-        self.display_frame_tk = None # Release reference to previous PhotoImage
+        self.display_frame_tk = None # Release previous PhotoImage reference
 
+        # Handle case where frame is None (e.g., before capture starts)
         if frame is None:
-            # Display placeholder text if no frame is available
             try:
                 cw, ch = self.canvas.winfo_width(), self.canvas.winfo_height()
-                if cw > 1 and ch > 1: # Ensure canvas has size
+                if cw > 1 and ch > 1: # Ensure canvas has valid dimensions
                     self.canvas.create_text(
                         cw / 2, ch / 2,
                         text="No Image\n(Select Window & Start Capture)",
                         fill="gray50", tags="display_content", justify=tk.CENTER
                     )
-            except Exception: pass # Ignore errors during placeholder drawing
+            except Exception: pass # Ignore errors during placeholder text creation
             return
 
         try:
-            # Get frame and canvas dimensions
             fh, fw = frame.shape[:2]
             cw, ch = self.canvas.winfo_width(), self.canvas.winfo_height()
 
             # Check for invalid dimensions
             if fw <= 0 or fh <= 0 or cw <= 1 or ch <= 1: return
 
-            # Calculate scaling factor to fit frame within canvas while preserving aspect ratio
+            # Calculate scaling factor to fit frame within canvas
             scale = min(cw / fw, ch / fh)
-            nw, nh = int(fw * scale), int(fh * scale) # New width and height
+            nw, nh = int(fw * scale), int(fh * scale)
 
-            # Ensure new dimensions are valid
+            # Check for invalid scaled dimensions
             if nw < 1 or nh < 1: return
 
-            # Store scaling factor and display coordinates
+            # Store scaling and position info
             self.scale_x, self.scale_y = scale, scale
             self.frame_display_coords = {
-                "x": (cw - nw) // 2, "y": (ch - nh) // 2, # Centering offset
+                "x": (cw - nw) // 2, "y": (ch - nh) // 2, # Center the image
                 "w": nw, "h": nh
             }
 
-            # Resize the frame
+            # Resize image using OpenCV (linear interpolation is usually good enough)
             resized = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
-            # Convert from BGR (OpenCV) to RGB (PIL/Tkinter)
+            # Convert BGR (OpenCV) to RGB (PIL)
             img = Image.fromarray(cv2.cvtColor(resized, cv2.COLOR_BGR2RGB))
-            # Create PhotoImage object
+            # Convert PIL image to Tkinter PhotoImage
             self.display_frame_tk = ImageTk.PhotoImage(image=img)
 
-            # Draw the image on the canvas
+            # Display the image on the canvas
             self.canvas.create_image(
                 self.frame_display_coords["x"], self.frame_display_coords["y"],
                 anchor=tk.NW, image=self.display_frame_tk,
-                tags=("display_content", "frame_image") # Add tags for easy deletion
+                tags=("display_content", "frame_image") # Add tags for easy deletion/identification
             )
 
-            # Draw ROI rectangles on top of the image
+            # Draw ROI rectangles on top
             self._draw_rois()
 
         except Exception as e:
             print(f"Error displaying frame: {e}")
-            # Optionally display an error message on the canvas
+            # Attempt to display error message on canvas
             try:
-                 cw, ch = self.canvas.winfo_width(), self.canvas.winfo_height()
-                 self.canvas.create_text(cw/2, ch/2, text=f"Display Error:\n{e}", fill="red", tags="display_content")
-            except: pass
+                cw, ch = self.canvas.winfo_width(), self.canvas.winfo_height()
+                self.canvas.create_text(cw/2, ch/2, text=f"Display Error:\n{e}", fill="red", tags="display_content")
+            except: pass # Ignore errors during error display
 
-    def _process_rois(self, frame, ocr_engine):
+    def _process_rois(self, frame):
         """Extracts text from ROIs, checks stability, and triggers translation."""
-        if frame is None or ocr_engine is None: return
+        # No need to pass ocr_engine, use self.ocr_engine_type and self.ocr_lang
+        if frame is None or not self.ocr_engine_ready:
+            # print("_process_rois skipped: No frame or OCR not ready.")
+            return
 
-        extracted = {} # Store current OCR results for Live Text tab
-        stable_changed = False # Flag if stable text needs update/translation
-        new_stable = self.stable_texts.copy() # Work on a copy
+        extracted = {}
+        stable_changed = False
+        new_stable = self.stable_texts.copy()
 
         for roi in self.rois:
-            if roi.name == SNIP_ROI_NAME: continue # Skip the special snip name
+            if roi.name == SNIP_ROI_NAME: continue # Skip the special snip ROI
 
             roi_img_original = roi.extract_roi(frame)
+            roi_img_processed = roi.apply_color_filter(roi_img_original) # Apply filter
 
-            # Apply color filter if enabled for this ROI
-            roi_img_processed = roi.apply_color_filter(roi_img_original)
-
-            # Check if ROI extraction or filtering failed
             if roi_img_processed is None or roi_img_processed.size == 0:
-                extracted[roi.name] = "" # No text if ROI is invalid/empty
-                # Clear stability tracking if ROI becomes invalid
+                extracted[roi.name] = ""
+                # Reset history and stability if ROI becomes invalid
                 if roi.name in self.text_history: del self.text_history[roi.name]
                 if roi.name in new_stable:
                     del new_stable[roi.name]
                     stable_changed = True
                 continue
 
-            # Perform OCR on the (potentially filtered) ROI image
             try:
-                ocr_result_raw = ocr_engine.ocr(roi_img_processed, cls=True)
-
-                # Extract text lines from OCR result
-                text_lines = []
-                if ocr_result_raw and isinstance(ocr_result_raw, list) and len(ocr_result_raw) > 0:
-                     current_result_set = ocr_result_raw[0] if isinstance(ocr_result_raw[0], list) else ocr_result_raw
-                     if current_result_set:
-                         for item in current_result_set:
-                             text_info = None
-                             if isinstance(item, list) and len(item) >= 2 and isinstance(item[1], (list, tuple)):
-                                 text_info = item[1]
-                             elif isinstance(item, tuple) and len(item) >= 2:
-                                 text_info = item
-                             if isinstance(text_info, (tuple, list)) and len(text_info) >= 1 and text_info[0]:
-                                 text_lines.append(str(text_info[0]))
-
-                text = " ".join(text_lines).strip() # Combine lines
+                # Call the unified OCR function from utils.ocr
+                text = ocr.extract_text(roi_img_processed, lang=self.ocr_lang, engine_type=self.ocr_engine_type)
                 extracted[roi.name] = text
 
                 # --- Stability Check ---
                 history = self.text_history.get(roi.name, {"text": "", "count": 0})
                 if text == history["text"]:
-                    history["count"] += 1 # Increment count if text is the same
+                    history["count"] += 1
                 else:
-                    history = {"text": text, "count": 1} # Reset count if text changed
-                self.text_history[roi.name] = history # Update history
+                    history = {"text": text, "count": 1}
+                self.text_history[roi.name] = history
 
                 is_now_stable = history["count"] >= self.stable_threshold
                 was_stable = roi.name in self.stable_texts
                 current_stable_text = self.stable_texts.get(roi.name)
 
                 if is_now_stable:
-                    # Text is stable now
+                    # Mark as stable if threshold met and text is different from previous stable text
                     if not was_stable or current_stable_text != text:
-                        # Update stable text if it wasn't stable before or if the stable text changed
                         new_stable[roi.name] = text
                         stable_changed = True
                 elif was_stable:
-                    # Text was stable but is no longer considered stable (count reset)
+                    # If it was stable but no longer meets threshold (text changed), remove it
                     if roi.name in new_stable:
-                        del new_stable[roi.name] # Remove from stable texts
+                        del new_stable[roi.name]
                         stable_changed = True
+                # --- End Stability Check ---
 
             except Exception as e:
-                # Handle OCR errors for this specific ROI
+                # Handle errors during OCR for a specific ROI
                 print(f"!!! OCR Error for ROI {roi.name}: {e}")
                 extracted[roi.name] = "[OCR Error]"
                 self.text_history[roi.name] = {"text": "[OCR Error]", "count": 1}
-                # Ensure it's removed from stable text if an error occurs
                 if roi.name in new_stable:
                     del new_stable[roi.name]
                     stable_changed = True
 
-        # --- Update UI after processing all ROIs ---
-
-        # Update Live Text tab (schedule on main thread)
+        # --- Update UI and Trigger Translation (Scheduled on Main Thread) ---
         if hasattr(self, "text_tab") and self.text_tab.frame.winfo_exists():
+            # Update the "Live Text" tab
             self.master.after_idle(lambda et=extracted.copy(): self.text_tab.update_text(et))
 
-        # If stable text changed, update Stable Text tab and trigger auto-translate
         if stable_changed:
-            self.stable_texts = new_stable # Update the main stable text dictionary
-            # Update Stable Text tab (schedule on main thread)
+            self.stable_texts = new_stable
             if hasattr(self, "stable_text_tab") and self.stable_text_tab.frame.winfo_exists():
+                # Update the "Stable Text" tab
                 self.master.after_idle(lambda st=self.stable_texts.copy(): self.stable_text_tab.update_text(st))
 
-            # Trigger auto-translation if enabled and there's stable text
-            if (hasattr(self, "translation_tab") and
-                    self.translation_tab.frame.winfo_exists() and
-                    self.translation_tab.is_auto_translate_enabled()):
+            # --- Auto-Translate Trigger Logic ---
+            if hasattr(self, "translation_tab") and self.translation_tab.frame.winfo_exists() and self.translation_tab.is_auto_translate_enabled():
+                # Get all user-defined ROI names (excluding the snip one)
+                user_roi_names = {roi.name for roi in self.rois if roi.name != SNIP_ROI_NAME}
 
-                if any(self.stable_texts.values()): # Check if there's actually any stable text
+                # Check if user ROIs exist AND if all of them are keys in the *new* stable_texts
+                all_rois_are_stable = bool(user_roi_names) and user_roi_names.issubset(self.stable_texts.keys())
+
+                if all_rois_are_stable:
+                    # All conditions met: Trigger translation
+                    print("[Auto-Translate] All ROIs stable, triggering translation.")
                     self.master.after_idle(self.translation_tab.perform_translation)
                 else:
-                    # Clear overlays and translation preview if stable text becomes empty
-                    if hasattr(self, "overlay_manager"):
-                        self.master.after_idle(self.overlay_manager.clear_all_overlays)
-                    if hasattr(self, "translation_tab"):
-                        # Update translation preview to show nothing is stable
-                        self.master.after_idle(lambda: self.translation_tab.update_translation_results({}, "[No stable text]"))
+                    # Not all ROIs are stable, or no user ROIs exist.
+                    # Check if the reason is that stable_texts became empty.
+                    if not self.stable_texts: # If the stable text dictionary is now empty
+                        print("[Auto-Translate] Stable text cleared, clearing overlays.")
+                        if hasattr(self, "overlay_manager"):
+                            self.master.after_idle(self.overlay_manager.clear_all_overlays)
+                        # Also clear the translation preview
+                        if hasattr(self, "translation_tab"):
+                            self.master.after_idle(lambda: self.translation_tab.update_translation_results({}, "[Waiting for stable text...]"))
+                    # else:
+                        # Some ROIs might be stable, but not all. Do nothing.
+                        # print("[Auto-Translate] Waiting for all ROIs to stabilize.") # Optional log
+            # --- End of Auto-Translate Logic ---
+
 
     def _draw_rois(self):
         """Draws ROI rectangles and labels on the canvas."""
-        # Check if canvas is ready and has valid dimensions
         if not hasattr(self, "canvas") or not self.canvas.winfo_exists() or self.frame_display_coords["w"] <= 0:
             return
 
-        # Get offset of the displayed image on the canvas
         ox, oy = self.frame_display_coords["x"], self.frame_display_coords["y"]
-        # Delete previous ROI drawings
+        # Clear only ROI drawings, not the frame image
         self.canvas.delete("roi_drawing")
 
         for i, roi in enumerate(self.rois):
-            if roi.name == SNIP_ROI_NAME: continue # Don't draw the special snip ROI
+            if roi.name == SNIP_ROI_NAME: continue # Don't draw the snip ROI
 
             try:
-                # Calculate display coordinates based on original ROI coords and scaling
+                # Calculate display coordinates based on scaling and offset
                 dx1 = int(roi.x1 * self.scale_x) + ox
                 dy1 = int(roi.y1 * self.scale_y) + oy
                 dx2 = int(roi.x2 * self.scale_x) + ox
@@ -2055,15 +1764,15 @@ class VisualNovelTranslatorApp:
                 # Draw rectangle
                 self.canvas.create_rectangle(
                     dx1, dy1, dx2, dy2,
-                    outline="lime", width=1, # Green outline
+                    outline="lime", width=1, # Lime green outline
                     tags=("display_content", "roi_drawing", f"roi_{i}") # Add tags
                 )
                 # Draw label
                 self.canvas.create_text(
                     dx1 + 3, dy1 + 1, # Position slightly inside top-left corner
-                    text=roi.name, fill="lime", anchor=tk.NW, # Green text
+                    text=roi.name, fill="lime", anchor=tk.NW,
                     font=("TkDefaultFont", 8), # Small font
-                    tags=("display_content", "roi_drawing", f"roi_label_{i}") # Add tags
+                    tags=("display_content", "roi_drawing", f"roi_label_{i}")
                 )
             except Exception as e:
                 print(f"Error drawing ROI {roi.name}: {e}")
@@ -2072,7 +1781,7 @@ class VisualNovelTranslatorApp:
 
     def on_mouse_down(self, event):
         """Handles mouse button press on the canvas (for ROI definition)."""
-        # Only act if ROI selection is active and using snapshot
+        # Only active during ROI definition AND when using a snapshot
         if not self.roi_selection_active or not self.using_snapshot: return
 
         # Check if click is within the displayed image bounds
@@ -2087,13 +1796,13 @@ class VisualNovelTranslatorApp:
             self.roi_draw_rect_id = None
             return
 
-        # Record start coordinates (canvas coordinates)
+        # Record start coordinates (canvas coords)
         self.roi_start_coords = (event.x, event.y)
-        # Delete previous drawing rectangle if any
+        # Delete previous drawing rectangle if it exists
         if self.roi_draw_rect_id:
             try: self.canvas.delete(self.roi_draw_rect_id)
             except tk.TclError: pass
-        # Create new drawing rectangle
+        # Create new rectangle starting and ending at the click point
         self.roi_draw_rect_id = self.canvas.create_rectangle(
             event.x, event.y, event.x, event.y,
             outline="red", width=2, tags="roi_drawing" # Red outline for drawing
@@ -2101,45 +1810,48 @@ class VisualNovelTranslatorApp:
 
     def on_mouse_drag(self, event):
         """Handles mouse drag on the canvas (for ROI definition)."""
-        # Only act if dragging started correctly
         if not self.roi_selection_active or not self.roi_start_coords or not self.roi_draw_rect_id: return
 
         sx, sy = self.roi_start_coords
-        # Clamp current coordinates to be within the image bounds
+        # Clamp current coordinates to be within the image bounds on canvas
         img_x, img_y = self.frame_display_coords["x"], self.frame_display_coords["y"]
         img_w, img_h = self.frame_display_coords["w"], self.frame_display_coords["h"]
         cx = max(img_x, min(event.x, img_x + img_w))
         cy = max(img_y, min(event.y, img_y + img_h))
 
-        # Update the drawing rectangle coordinates
         try:
-            # Also clamp start coords just in case they were slightly off
+            # Also clamp start coordinates just in case they were slightly off
             clamped_sx = max(img_x, min(sx, img_x + img_w))
             clamped_sy = max(img_y, min(sy, img_y + img_h))
+            # Update the drawing rectangle coordinates
             self.canvas.coords(self.roi_draw_rect_id, clamped_sx, clamped_sy, cx, cy)
         except tk.TclError:
-            # Handle error if rectangle was destroyed
+            # Handle error if canvas/rectangle destroyed unexpectedly
             self.roi_draw_rect_id = None
             self.roi_start_coords = None
 
     def on_mouse_up(self, event):
         """Handles mouse button release on the canvas (completes ROI definition)."""
-        # Check if ROI definition was in progress
+        # Check if ROI definition was active and started correctly
         if not self.roi_selection_active or not self.roi_start_coords or not self.roi_draw_rect_id:
-            # Clean up just in case rect_id exists but start_coords is None
+            # Clean up potential dangling rectangle if drag never happened
             if self.roi_draw_rect_id:
                 try: self.canvas.delete(self.roi_draw_rect_id)
                 except tk.TclError: pass
             self.roi_draw_rect_id = None
             self.roi_start_coords = None
-            # Don't deactivate roi_selection_active here if click was outside image
+            # If selection was active but failed, deactivate it
+            if self.roi_selection_active:
+                 self.roi_selection_active = False
+                 if hasattr(self, "roi_tab"): self.roi_tab.on_roi_selection_toggled(False)
+                 if self.using_snapshot: self.return_to_live() # Exit snapshot if active
             return
 
         # Get final coordinates of the drawing rectangle
         try: coords = self.canvas.coords(self.roi_draw_rect_id)
-        except tk.TclError: coords = None
+        except tk.TclError: coords = None # Handle error if widget destroyed
 
-        # Clean up drawing rectangle and reset state immediately
+        # Clean up drawing rectangle and reset state *before* processing ROI
         if self.roi_draw_rect_id:
             try: self.canvas.delete(self.roi_draw_rect_id)
             except tk.TclError: pass
@@ -2151,14 +1863,14 @@ class VisualNovelTranslatorApp:
         # Validate coordinates and size
         if coords is None or len(coords) != 4:
             print("ROI definition failed (invalid coords).")
-            if self.using_snapshot: self.return_to_live() # Return to live if failed
+            if self.using_snapshot: self.return_to_live() # Exit snapshot
             return
 
-        x1d, y1d, x2d, y2d = map(int, coords) # Display coordinates
-        min_size = 5 # Minimum pixel size on screen
+        x1d, y1d, x2d, y2d = map(int, coords)
+        min_size = 5 # Minimum size in pixels on the canvas
         if abs(x2d - x1d) < min_size or abs(y2d - y1d) < min_size:
             messagebox.showwarning("ROI Too Small", f"Defined region too small (min {min_size}x{min_size} px required).", parent=self.master)
-            if self.using_snapshot: self.return_to_live() # Return to live if failed
+            if self.using_snapshot: self.return_to_live() # Exit snapshot
             return
 
         # --- Get ROI Name ---
@@ -2166,70 +1878,66 @@ class VisualNovelTranslatorApp:
         overwrite_name = None
         existing_names = {r.name for r in self.rois if r.name != SNIP_ROI_NAME}
 
-        if not roi_name:
-            # Auto-generate name if empty
+        if not roi_name: # Generate default name if empty
             i = 1; roi_name = f"roi_{i}"
             while roi_name in existing_names: i += 1; roi_name = f"roi_{i}"
-        elif roi_name in existing_names:
-            # Ask for confirmation if name exists
+        elif roi_name in existing_names: # Check for overwrite
             if not messagebox.askyesno("ROI Exists", f"An ROI named '{roi_name}' already exists. Overwrite it?", parent=self.master):
-                if self.using_snapshot: self.return_to_live() # Return to live if cancelled
+                if self.using_snapshot: self.return_to_live() # Exit snapshot if user cancels
                 return
-            overwrite_name = roi_name # Flag for overwrite
-        elif roi_name == SNIP_ROI_NAME:
-            # Prevent using reserved name
+            overwrite_name = roi_name
+        elif roi_name == SNIP_ROI_NAME: # Check for reserved name
             messagebox.showerror("Invalid Name", f"Cannot use the reserved name '{SNIP_ROI_NAME}'. Please choose another.", parent=self.master)
-            if self.using_snapshot: self.return_to_live()
+            if self.using_snapshot: self.return_to_live() # Exit snapshot
             return
 
-        # --- Convert display coordinates to original frame coordinates ---
-        ox, oy = self.frame_display_coords["x"], self.frame_display_coords["y"] # Image offset on canvas
-        # Coordinates relative to the displayed image
+        # --- Convert Canvas Coords to Original Frame Coords ---
+        ox, oy = self.frame_display_coords["x"], self.frame_display_coords["y"]
+        # Coords relative to the displayed image's top-left corner
         rx1, ry1 = min(x1d, x2d) - ox, min(y1d, y2d) - oy
         rx2, ry2 = max(x1d, x2d) - ox, max(y1d, y2d) - oy
 
         # Check for valid scaling factor
         if self.scale_x <= 0 or self.scale_y <= 0:
             print("Error: Invalid scaling factor during ROI creation.")
-            if self.using_snapshot: self.return_to_live()
+            if self.using_snapshot: self.return_to_live() # Exit snapshot
             return
 
-        # Convert back to original frame coordinates
+        # Convert relative display coords back to original frame coords
         orig_x1, orig_y1 = int(rx1 / self.scale_x), int(ry1 / self.scale_y)
         orig_x2, orig_y2 = int(rx2 / self.scale_x), int(ry2 / self.scale_y)
 
-        # Final size check on original coordinates
+        # Final size check in original coordinates
         if abs(orig_x2 - orig_x1) < 1 or abs(orig_y2 - orig_y1) < 1:
             messagebox.showwarning("ROI Too Small", "Calculated ROI size is too small in original frame.", parent=self.master)
-            if self.using_snapshot: self.return_to_live()
+            if self.using_snapshot: self.return_to_live() # Exit snapshot
             return
 
         # --- Create or Update ROI Object ---
-        # Create new ROI with default color filter settings
         new_roi = ROI(roi_name, orig_x1, orig_y1, orig_x2, orig_y2)
 
         if overwrite_name:
-            # Find existing ROI and replace it
             found = False
             for i, r in enumerate(self.rois):
-                 if r.name == overwrite_name:
-                     # Preserve color filter settings from the old ROI if overwriting
-                     new_roi.color_filter_enabled = r.color_filter_enabled
-                     new_roi.target_color = r.target_color
-                     new_roi.color_threshold = r.color_threshold
-                     self.rois[i] = new_roi
-                     found = True
-                     break
+                if r.name == overwrite_name:
+                    # Preserve color filter settings when overwriting geometry
+                    new_roi.color_filter_enabled = r.color_filter_enabled
+                    new_roi.target_color = r.target_color
+                    new_roi.replacement_color = r.replacement_color
+                    new_roi.color_threshold = r.color_threshold
+                    self.rois[i] = new_roi
+                    found = True
+                    break
             if not found: # Should not happen if overwrite_name was set
-                 print(f"Warning: Tried to overwrite '{overwrite_name}' but not found.")
-                 self.rois.append(new_roi) # Add as new instead
+                print(f"Warning: Tried to overwrite '{overwrite_name}' but not found.")
+                self.rois.append(new_roi) # Add as new if somehow not found
         else:
             # Add the new ROI to the list
             self.rois.append(new_roi)
 
         print(f"Created/Updated ROI: {new_roi.to_dict()}")
 
-        # Update UI
+        # --- Update UI and State ---
         if hasattr(self, "roi_tab"): self.roi_tab.update_roi_list() # Update listbox
         self._draw_rois() # Redraw ROIs on canvas
         action = "created" if not overwrite_name else "updated"
@@ -2239,13 +1947,13 @@ class VisualNovelTranslatorApp:
         if hasattr(self, "roi_tab"):
             existing_names_now = {r.name for r in self.rois if r.name != SNIP_ROI_NAME}
             next_name = "dialogue" if "dialogue" not in existing_names_now else ""
-            if not next_name: # If "dialogue" exists, find next "roi_N"
+            if not next_name: # Generate roi_N if dialogue exists
                 i = 1; next_name = f"roi_{i}"
                 while next_name in existing_names_now: i += 1; next_name = f"roi_{i}"
             self.roi_tab.roi_name_entry.delete(0, tk.END)
             self.roi_tab.roi_name_entry.insert(0, next_name)
 
-        # Create overlay window for the new/updated ROI
+        # Create or update the corresponding overlay window
         if hasattr(self, "overlay_manager"):
             self.overlay_manager.create_overlay_for_roi(new_roi)
 
@@ -2258,14 +1966,11 @@ class VisualNovelTranslatorApp:
         """Shows or brings the floating controls window to the front."""
         try:
             if self.floating_controls is None or not self.floating_controls.winfo_exists():
-                # Create if it doesn't exist
                 self.floating_controls = FloatingControls(self.master, self)
             else:
-                # Deiconify (if minimized/hidden) and lift (bring to front)
-                self.floating_controls.deiconify()
-                self.floating_controls.lift()
-                # Update button states (e.g., auto-translate toggle)
-                self.floating_controls.update_button_states()
+                self.floating_controls.deiconify() # Ensure it's not minimized/withdrawn
+                self.floating_controls.lift()      # Bring to top
+                self.floating_controls.update_button_states() # Sync button states
         except Exception as e:
             print(f"Error showing floating controls: {e}")
             self.update_status("Error showing controls.")
@@ -2273,39 +1978,38 @@ class VisualNovelTranslatorApp:
     def hide_floating_controls(self):
         """Hides the floating controls window."""
         if self.floating_controls and self.floating_controls.winfo_exists():
-            self.floating_controls.withdraw() # Hide instead of destroy
+            self.floating_controls.withdraw()
 
     def on_close(self):
         """Handles the application closing sequence."""
         print("Close requested...")
         # Cancel any active modes
         if self.snip_mode_active: self.cancel_snip_mode()
-        if self.roi_selection_active: self.toggle_roi_selection() # Cancel ROI selection
+        if self.roi_selection_active: self.toggle_roi_selection()
 
-        # Close any open snip result window
+        # Close the snip result window if it's open
         if self.current_snip_window and self.current_snip_window.winfo_exists():
             try: self.current_snip_window.destroy_window()
             except Exception: pass
             self.current_snip_window = None
 
-        # Stop capture if running
+        # Stop capture if running and wait for it to finish
         if self.capturing:
             self.update_status("Stopping capture before closing...")
             self.stop_capture()
-            # Check periodically if capture has stopped before finalizing close
+            # Schedule check to finalize close after capture stops
             self.master.after(500, self.check_capture_stopped_and_close)
         else:
-            # If capture not running, proceed to finalize close immediately
+            # If not capturing, proceed to final close steps directly
             self._finalize_close()
 
     def check_capture_stopped_and_close(self):
         """Checks if capture thread is stopped, then finalizes close."""
-        # Check capturing flag and thread status
+        # Check if capture flag is off AND thread is gone or dead
         if not self.capturing and (self.capture_thread is None or not self.capture_thread.is_alive()):
-            # Capture is stopped, finalize closing
             self._finalize_close()
         else:
-            # Still stopping, check again later
+            # Still waiting for capture to stop
             print("Waiting for capture thread to stop...")
             self.master.after(500, self.check_capture_stopped_and_close)
 
@@ -2314,250 +2018,73 @@ class VisualNovelTranslatorApp:
         print("Finalizing close...")
         self.capturing = False # Ensure flag is false
 
-        # Destroy all overlay windows managed by OverlayManager
+        # Destroy all overlay windows managed by the manager
         if hasattr(self, "overlay_manager"):
             self.overlay_manager.destroy_all_overlays()
 
         # Save floating controls position and destroy the window
         if self.floating_controls and self.floating_controls.winfo_exists():
             try:
-                # Only save position if the window is visible/normal
+                # Only save position if the window is visible (not withdrawn)
                 if self.floating_controls.state() == "normal":
-                    geo = self.floating_controls.geometry() # Format: "WxH+X+Y"
+                    geo = self.floating_controls.geometry()
                     parts = geo.split('+')
-                    if len(parts) == 3: # Expecting size, x, y
+                    if len(parts) == 3: # Format like WxH+X+Y
                         x_str, y_str = parts[1], parts[2]
-                        # Basic validation
+                        # Basic check if coordinates look valid
                         if x_str.isdigit() and y_str.isdigit():
                             set_setting("floating_controls_pos", f"{x_str},{y_str}")
                         else: print(f"Warn: Invalid floating controls coordinates in geometry: {geo}")
                     else: print(f"Warn: Could not parse floating controls geometry: {geo}")
             except Exception as e: print(f"Error saving floating controls position: {e}")
-            # Destroy the window regardless of position saving success
+            # Destroy the window regardless of saving position
             try: self.floating_controls.destroy()
             except tk.TclError: pass # Ignore error if already destroyed
 
-        # Ensure snip result window is destroyed (redundant check)
+        # Ensure snip result window is destroyed (double check)
         if self.current_snip_window and self.current_snip_window.winfo_exists():
             try: self.current_snip_window.destroy_window()
             except Exception: pass
 
         print("Exiting application.")
-        # Quit the Tkinter main loop and destroy the main window
         try:
+            # Standard Tkinter exit sequence
             self.master.quit()
             self.master.destroy()
-        except tk.TclError: pass # Ignore errors if already destroying
+        except tk.TclError: pass # Ignore errors if widgets already gone
         except Exception as e: print(f"Error during final window destruction: {e}")
 
 # --- END OF FILE app.py ---
 ```
 
-**5. New File: `ui/preview_window.py`**
-
-```python
-# --- START OF FILE ui/preview_window.py ---
-
-import tkinter as tk
-from tkinter import ttk
-from PIL import Image, ImageTk
-import numpy as np
-
-class PreviewWindow(tk.Toplevel):
-    """A simple Toplevel window to display an image preview."""
-
-    def __init__(self, master, title="Preview", image_np=None):
-        super().__init__(master)
-        self.title(title)
-        self.transient(master) # Keep window on top of master
-        self.grab_set() # Modal behavior (optional)
-        self.resizable(False, False)
-
-        self.image_label = ttk.Label(self)
-        self.image_label.pack(padx=5, pady=5)
-
-        self.photo_image = None # Keep a reference
-
-        if image_np is not None:
-            self.update_image(image_np)
-        else:
-            self.image_label.config(text="No image data.")
-
-        # Center the window relative to the master
-        self.update_idletasks()
-        master_x = master.winfo_rootx()
-        master_y = master.winfo_rooty()
-        master_w = master.winfo_width()
-        master_h = master.winfo_height()
-        win_w = self.winfo_width()
-        win_h = self.winfo_height()
-        x = master_x + (master_w - win_w) // 2
-        y = master_y + (master_h - win_h) // 3 # Position slightly higher
-        self.geometry(f"+{max(0, x)}+{max(0, y)}")
-
-        self.protocol("WM_DELETE_WINDOW", self.close_window)
-        self.bind("<Escape>", lambda e: self.close_window())
-
-    def update_image(self, image_np):
-        """Updates the displayed image."""
-        if image_np is None or image_np.size == 0:
-            self.image_label.config(image='', text="Invalid image data.")
-            self.photo_image = None
-            return
-
-        try:
-            # Ensure image is in a displayable format (e.g., RGB)
-            if len(image_np.shape) == 3 and image_np.shape[2] == 3:
-                # Assume BGR from OpenCV, convert to RGB for PIL
-                # If it's already RGB, this won't hurt much
-                # img_rgb = cv2.cvtColor(image_np, cv2.COLOR_BGR2RGB) # Done in roi_tab now
-                img_pil = Image.fromarray(image_np) # Assumes input is RGB now
-            elif len(image_np.shape) == 2: # Grayscale
-                img_pil = Image.fromarray(image_np, 'L')
-            else:
-                 self.image_label.config(image='', text="Unsupported image format.")
-                 self.photo_image = None
-                 return
-
-            self.photo_image = ImageTk.PhotoImage(img_pil)
-            self.image_label.config(image=self.photo_image, text="")
-
-        except Exception as e:
-            print(f"Error updating preview image: {e}")
-            self.image_label.config(image='', text=f"Error: {e}")
-            self.photo_image = None
-
-    def close_window(self):
-        self.grab_release()
-        self.destroy()
-
-# --- END OF FILE ui/preview_window.py ---
-```
-
-**6. New File: `ui/color_picker.py`**
-
-```python
-# --- START OF FILE ui/color_picker.py ---
-
-import tkinter as tk
-import mss
-import numpy as np
-import cv2 # Only needed if converting color space, mss gives RGB
-
-class ScreenColorPicker:
-    """Handles capturing a color from anywhere on the screen."""
-
-    def __init__(self, master):
-        self.master = master
-        self.overlay = None
-        self.callback = None
-
-    def grab_color(self, callback):
-        """Creates the overlay and starts the color picking process."""
-        if self.overlay and self.overlay.winfo_exists():
-            print("Color picker already active.")
-            return
-
-        self.callback = callback
-        try:
-            self.overlay = tk.Toplevel(self.master)
-            self.overlay.attributes("-fullscreen", True)
-            self.overlay.attributes("-alpha", 0.1) # Very transparent
-            self.overlay.overrideredirect(True)
-            self.overlay.attributes("-topmost", True)
-            self.overlay.configure(cursor="crosshair") # Use crosshair cursor
-            self.overlay.grab_set() # Capture input
-
-            # Bind events
-            self.overlay.bind("<ButtonPress-1>", self._on_click)
-            self.overlay.bind("<Escape>", self._on_cancel)
-
-        except Exception as e:
-            print(f"Error creating color picker overlay: {e}")
-            self._cleanup()
-            if self.callback:
-                self.callback(None) # Notify callback of failure/cancellation
-
-    def _on_click(self, event):
-        """Callback when the user clicks on the overlay."""
-        x, y = event.x_root, event.y_root
-        print(f"Color picker clicked at screen coordinates: ({x}, {y})")
-
-        color_rgb = None
-        try:
-            # Define the 1x1 pixel region to capture
-            monitor = {"top": y, "left": x, "width": 1, "height": 1}
-            with mss.mss() as sct:
-                sct_img = sct.grab(monitor)
-
-            # Convert the raw BGRA data to a NumPy array
-            img_array = np.array(sct_img, dtype=np.uint8)
-
-            # Extract the single pixel's color (mss provides BGRA)
-            # We want RGB, so take the first 3 channels and reverse order
-            if img_array.size >= 3:
-                 b, g, r, _ = img_array[0, 0] # Extract BGRA
-                 color_rgb = (int(r), int(g), int(b)) # Convert to RGB tuple
-                 print(f"Picked color (RGB): {color_rgb}")
-            else:
-                 print("Error: Captured image data is too small.")
-
-        except Exception as e:
-            print(f"Error capturing screen color: {e}")
-
-        # Clean up the overlay
-        self._cleanup()
-
-        # Call the original callback with the result (color_rgb or None)
-        if self.callback:
-            self.callback(color_rgb)
-
-    def _on_cancel(self, event=None):
-        """Callback when the user presses Escape."""
-        print("Color picking cancelled.")
-        self._cleanup()
-        if self.callback:
-            self.callback(None) # Notify callback of cancellation
-
-    def _cleanup(self):
-        """Destroys the overlay window and releases grab."""
-        if self.overlay and self.overlay.winfo_exists():
-            try:
-                self.overlay.grab_release()
-                self.overlay.destroy()
-            except tk.TclError:
-                pass # Ignore if already destroyed
-        self.overlay = None
-        self.callback = None
-
-# --- END OF FILE ui/color_picker.py ---
-```
-
 **Summary of Changes:**
 
-1.  **`ROI` Class (`utils/roi.py`):**
-    *   Added `color_filter_enabled`, `target_color` (as RGB tuple), `color_threshold` attributes.
-    *   Updated `to_dict` and `from_dict` to handle these new attributes, ensuring backward compatibility.
-    *   Added `apply_color_filter` method using `cv2.inRange` to create a mask and apply it (setting non-matching pixels to white).
-    *   Added static methods `rgb_to_hex` and `hex_to_rgb` for convenience.
-2.  **ROI Saving/Loading (`utils/config.py`):**
-    *   Modified `save_rois` and `load_rois` to implicitly use the updated `ROI.to_dict` and `ROI.from_dict` methods, so they now handle the color filter settings automatically.
-3.  **ROI Tab UI (`ui/roi_tab.py`):**
-    *   Added a new `LabelFrame` for "Color Filtering".
-    *   Added widgets: Checkbutton (enable), Label (color preview), Buttons (Pick Color, Pick from Screen), Scale (threshold), Buttons (Apply, Preview Original, Preview Filtered).
-    *   `on_roi_selected`: Now loads the selected ROI's filter settings into the UI and enables/disables the filter section.
-    *   `apply_color_filter_settings`: Reads UI values and updates the *in-memory* `ROI` object. Reminds the user to save the main ROI config.
-    *   `pick_color`: Uses `colorchooser`.
-    *   `pick_color_from_screen`: Uses the new `ScreenColorPicker` class.
-    *   `_show_preview`: Handles generating original or filtered previews using the new `PreviewWindow`. It applies the *current UI settings* for the filtered preview.
-    *   `update_roi_list`: Added a `[C]` prefix to indicate if color filtering is enabled for an ROI.
-    *   Imported `PreviewWindow` and `ScreenColorPicker`.
-4.  **App Logic (`app.py`):**
-    *   `_process_rois`: Now calls `roi.apply_color_filter()` on the extracted ROI image before passing it to OCR.
-    *   Imported `PreviewWindow` and `ScreenColorPicker`.
-5.  **Preview Window (`ui/preview_window.py`):**
-    *   New `Toplevel` window class to display a NumPy image using PIL/Tkinter.
-6.  **Screen Color Picker (`ui/color_picker.py`):**
-    *   New class using `mss` to create a full-screen overlay, capture the color at the click position, and return it via a callback.
-
-Remember to place the new files (`preview_window.py` and `color_picker.py`) inside the `ui` directory.
+1.  **`utils/settings.py`:** Added `ocr_engine` to `DEFAULT_SETTINGS`.
+2.  **`utils/ocr.py`:**
+    *   Major refactor.
+    *   Imports `easyocr`, `paddleocr`, and `winrt` components conditionally.
+    *   Adds language mapping dictionaries (`PADDLE_LANG_MAP`, `EASYOCR_LANG_MAP`, `WINDOWS_OCR_LANG_MAP`).
+    *   Uses global variables (`_paddle_ocr_instance`, etc.) for lazy initialization of engines.
+    *   Includes `_init_paddle`, `_init_easyocr`, `_init_windows_ocr` functions to handle engine loading, checking availability (for Windows OCR), and language mapping.
+    *   Uses a `threading.Lock` (`_init_lock`) to prevent race conditions during engine initialization.
+    *   Includes `_run_windows_ocr_async` helper using `asyncio` for Windows OCR.
+    *   The main `extract_text` function now acts as a dispatcher:
+        *   Takes `engine_type` as an argument.
+        *   Calls the appropriate `_init_...` function if needed (within the lock).
+        *   Calls the specific OCR method of the initialized engine.
+        *   Standardizes the output string format.
+        *   Includes basic error handling for initialization and runtime errors.
+3.  **`ui/capture_tab.py`:**
+    *   Added `OCR_ENGINES` list, conditionally including `"windows"`.
+    *   Added a `ttk.Combobox` (`engine_combo`) for selecting the engine.
+    *   Loads/saves the `ocr_engine` setting.
+    *   Added `on_engine_selected` handler to call `app.set_ocr_engine`.
+    *   Modified `on_language_changed` to also pass the *current engine* to `app.update_ocr_language`.
+4.  **`app.py`:**
+    *   Stores `ocr_engine_type` and `ocr_engine_ready` state.
+    *   Removed the old `self.ocr` instance variable and `OCR_ENGINE_LOCK`.
+    *   Added `_trigger_ocr_initialization` to handle engine loading in a background thread, updating `ocr_engine_ready` and status.
+    *   Added `set_ocr_engine` method called by the capture tab to change the engine type and trigger re-initialization.
+    *   Renamed `update_ocr_engine` to `update_ocr_language` for clarity, which now triggers re-initialization for the *current* engine type with the *new* language.
+    *   Modified `start_capture` and `start_snip_mode` to check `self.ocr_engine_ready` and show messages if initializing.
+    *   Modified `_process_rois` and `_process_snip_thread` to call the new `ocr.extract_text(..., lang=self.ocr_lang, engine_type=self.ocr_engine_type)`.

@@ -176,3 +176,5 @@ cython_debug/
 cache/
 context_history/
 roi_configs/
+translation_presets.json
+vn_translator_settings.json

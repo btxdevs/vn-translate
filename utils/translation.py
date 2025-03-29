@@ -22,8 +22,7 @@ def format_message_for_log(message):
     """Formats a message dictionary for concise logging."""
     role = message.get('role', 'unknown')
     content = message.get('content', '')
-    content_display = (content[:75] + '...') if len(content) > 78 else content
-    content_display = content_display.replace('\n', '\\n')
+    content_display = content.replace('\n', '\\n')
     return f"[{role}] '{content_display}'"
 
 # --- Directory and Hashing ---

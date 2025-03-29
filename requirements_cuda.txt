@@ -1,3 +1,7 @@
+--extra-index-url https://download.pytorch.org/whl/cu118
+
+
+
 opencv-python==4.11.0.86
 numpy<2
 PyGetWindow==0.0.9

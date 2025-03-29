@@ -1,107 +1,121 @@
 @echo off
-setlocal enabledelayedexpansion
+title Visual Novel Translator Setup and Run
+setlocal
 
 REM --- Configuration ---
-set VENV_NAME=venv
-set PYTHON_EXE=python
-set REQUIREMENTS_FILE=requirements.txt
+set VENV_DIR=.venv
+set REQUIREMENTS_CPU_FILE=requirements.txt
+set REQUIREMENTS_CUDA_FILE=requirements_cuda.txt
 set MAIN_SCRIPT=main.py
-set SETUP_FLAG_FILE=%VENV_NAME%\.setup_complete
+set CHOSEN_REQUIREMENTS_FILE=
 
-REM --- Function to check if command exists ---
-:command_exists
-where %1 >nul 2>nul
-exit /b %errorlevel%
-
-REM --- Check if Python is available ---
-echo Checking for Python (%PYTHON_EXE%)...
-call :command_exists %PYTHON_EXE%
+REM --- Check for Python ---
+echo Checking for Python installation...
+where python >nul 2>nul
 if %errorlevel% neq 0 (
-    echo ERROR: Python executable '%PYTHON_EXE%' not found in PATH.
-    echo Please install Python 3.8+ and ensure it's added to your system PATH.
-    goto :error_exit
+    echo ERROR: Python not found in PATH. Please install Python 3 and ensure it's added to your PATH.
+    pause
+    goto :eof
+)
+echo Python found.
+
+REM --- Check for Virtual Environment ---
+if not exist "%VENV_DIR%\Scripts\activate.bat" (
+    echo Virtual environment not found. Creating one...
+    python -m venv %VENV_DIR%
+    if %errorlevel% neq 0 (
+        echo ERROR: Failed to create virtual environment in "%VENV_DIR%".
+        pause
+        goto :eof
+    )
+    echo Virtual environment created successfully.
+    set NEEDS_INSTALL=1
 ) else (
-    echo Python found.
+    echo Virtual environment found.
+    set NEEDS_INSTALL=0
 )
 
-REM --- Check if already set up ---
-if exist "%VENV_NAME%" (
-    if exist "%SETUP_FLAG_FILE%" (
-        echo Virtual environment '%VENV_NAME%' already set up.
-        goto :run_app
+REM --- Activate Virtual Environment ---
+echo Activating virtual environment...
+call "%VENV_DIR%\Scripts\activate.bat"
+if %errorlevel% neq 0 (
+    echo ERROR: Failed to activate virtual environment.
+    pause
+    goto :eof
+)
+
+REM --- Check if installation is needed (if venv existed) ---
+if "%NEEDS_INSTALL%"=="0" (
+    echo Checking if core dependencies are installed...
+    pip show opencv-python >nul 2>nul
+    if %errorlevel% neq 0 (
+        echo Core dependencies not found. Triggering installation.
+        set NEEDS_INSTALL=1
     ) else (
-        echo Virtual environment '%VENV_NAME%' exists but setup flag not found.
-        echo Consider deleting the '%VENV_NAME%' folder and re-running if setup failed previously.
-        echo Attempting to run the app anyway...
-        goto :run_app
+        echo Core dependencies seem to be installed. Skipping installation check.
     )
 )
 
-REM --- Start Setup ---
-echo Creating virtual environment '%VENV_NAME%'...
+REM --- Install Requirements if Needed ---
+REM This block is parsed even if NEEDS_INSTALL is 0, so special characters need escaping
+if "%NEEDS_INSTALL%"=="1" (
+    REM --- Ask user for installation type ---
+    :ask_install_type
+    echo.
+    echo ----------------------------------------------------------------------
+    echo  Choose installation type:
+    REM Escaped parentheses below using ^
+    echo    (1^) CPU-only ^(Recommended if unsure or no NVIDIA GPU^)
+    echo    (2^) CUDA ^(GPU^) support ^(Requires NVIDIA GPU + CUDA setup^)
+    echo ----------------------------------------------------------------------
+    set /p INSTALL_CHOICE="  Enter choice (1 or 2): "
 
-REM Create the virtual environment (Quote the executable)
-"%PYTHON_EXE%" -m venv "%VENV_NAME%"
-if %errorlevel% neq 0 (
-    echo ERROR: Failed to create virtual environment '%VENV_NAME%'.
-    echo Check permissions and Python installation.
-    goto :error_exit
+    if "%INSTALL_CHOICE%"=="1" (
+        set CHOSEN_REQUIREMENTS_FILE=%REQUIREMENTS_CPU_FILE%
+        echo Selected CPU-only requirements file: %CHOSEN_REQUIREMENTS_FILE%
+    ) else if "%INSTALL_CHOICE%"=="2" (
+        set CHOSEN_REQUIREMENTS_FILE=%REQUIREMENTS_CUDA_FILE%
+        echo Selected CUDA (GPU^) requirements file: %CHOSEN_REQUIREMENTS_FILE%
+    ) else (
+        echo Invalid choice. Please enter '1' or '2'.
+        goto :ask_install_type
+    )
+    echo.
+
+    REM --- Check if chosen file exists ---
+    if not exist "%CHOSEN_REQUIREMENTS_FILE%" (
+        echo ERROR: Requirements file "%CHOSEN_REQUIREMENTS_FILE%" not found!
+        pause
+        goto :eof
+    )
+
+    REM --- Install chosen requirements ---
+    echo Installing dependencies from %CHOSEN_REQUIREMENTS_FILE%...
+    pip install -r "%CHOSEN_REQUIREMENTS_FILE%"
+    if %errorlevel% neq 0 (
+        echo ERROR: Failed to install dependencies. Please check %CHOSEN_REQUIREMENTS_FILE%, your internet connection, and CUDA setup if applicable.
+        pause
+        goto :eof
+    )
+    echo Dependencies installed successfully.
 )
-echo Virtual environment created successfully.
 
-echo Installing dependencies from "%REQUIREMENTS_FILE%"...
-echo This may take a while, especially for PyTorch and OCR libraries...
-
-REM Define the path to the Python executable within the venv
-set VENV_PYTHON="%VENV_NAME%\Scripts\python.exe"
-
-REM Use the Python interpreter inside the venv to run pip install (Quote executable and requirements file)
-%VENV_PYTHON% -m pip install -r "%REQUIREMENTS_FILE%"
+REM --- Run the Application ---
+echo Starting Visual Novel Translator...
+echo ====================================
+python %MAIN_SCRIPT%
 if %errorlevel% neq 0 (
-    echo ERROR: Failed to install dependencies. Check network connection and "%REQUIREMENTS_FILE%".
-    echo You might need to install C++ Build Tools or specific CUDA versions manually first.
-    echo Deleting potentially incomplete venv folder. Please re-run the script.
-    rmdir /s /q "%VENV_NAME%" > nul 2>&1
-    goto :error_exit
-)
-
-REM Create setup complete flag
-echo Setup Complete > "%SETUP_FLAG_FILE%"
-if %errorlevel% neq 0 (
-    echo WARNING: Could not create setup flag file "%SETUP_FLAG_FILE%". Setup might run again next time.
-)
-
-echo Dependencies installed successfully. Environment setup complete.
-
-:run_app
-echo ---
-echo Launching Visual Novel Translator...
-echo ---
-REM Define the path to the Python executable within the venv (needed again if jumped directly here)
-set VENV_PYTHON="%VENV_NAME%\Scripts\python.exe"
-REM Run the main application using the Python interpreter from the virtual environment (Quote executable and script)
-%VENV_PYTHON% "%MAIN_SCRIPT%"
-
-if %errorlevel% neq 0 (
-    echo ---
-    echo WARNING: Application exited with an error (code %errorlevel%). Check console output above for details.
-    echo ---
+    echo ERROR: The application exited with an error.
 ) else (
-    echo ---
-    echo Application closed.
-    echo ---
+    echo Application finished.
 )
-goto :end
+echo ====================================
 
-:error_exit
-echo ---
-echo Setup failed. Please check the error messages above.
-echo ---
-pause
-exit /b 1
+:cleanup
+REM Deactivate is usually not necessary for script termination
+echo Script finished. Press any key to exit.
+pause >nul
 
-:end
-echo Script finished.
+:eof
 endlocal
-pause
-exit /b 0
+exit /b %errorlevel%

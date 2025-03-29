@@ -3,6 +3,7 @@ from tkinter import ttk
 from ui.base import BaseTab
 from ui.overlay_tab import SNIP_ROI_NAME
 
+
 class TextTab(BaseTab):
     def setup_ui(self):
         settings_frame = ttk.Frame(self.frame, padding=(0, 0, 0, 10))
@@ -28,6 +29,7 @@ class TextTab(BaseTab):
         )
         threshold_value_label.pack(side=tk.LEFT, padx=(0, 5))
         self._update_threshold_label(self.app.stable_threshold)
+
         text_frame = ttk.LabelFrame(self.frame, text="Live Extracted Text (per frame)", padding="10")
         text_frame.pack(fill=tk.BOTH, expand=True, pady=0)
         self.text_display = tk.Text(text_frame, wrap=tk.WORD, height=10, width=40, font=("Consolas", 9))
@@ -49,8 +51,6 @@ class TextTab(BaseTab):
             new_threshold = int(float(value))
             self.app.update_stable_threshold(new_threshold)
             self._update_threshold_label(new_threshold)
-        except ValueError:
-            print("Invalid threshold value from slider")
         except Exception as e:
             print(f"Error updating threshold: {e}")
 
@@ -70,10 +70,9 @@ class TextTab(BaseTab):
                 else:
                     self.text_display.insert(tk.END, f"[{roi_name}]:\n-\n\n")
             self.text_display.config(state=tk.DISABLED)
-        except tk.TclError:
-            print("Warning: TextTab text_display widget likely destroyed during update.")
         except Exception as e:
             print(f"Error updating TextTab: {e}")
+
 
 class StableTextTab(BaseTab):
     def setup_ui(self):
@@ -104,7 +103,5 @@ class StableTextTab(BaseTab):
             if not has_stable_text:
                 self.stable_text_display.insert(tk.END, "[Waiting for stable text...]")
             self.stable_text_display.config(state=tk.DISABLED)
-        except tk.TclError:
-            print("Warning: StableTextTab stable_text_display widget likely destroyed during update.")
         except Exception as e:
             print(f"Error updating StableTextTab: {e}")

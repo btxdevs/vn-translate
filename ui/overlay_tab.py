@@ -6,6 +6,7 @@ import tkinter.font as tkFont
 
 SNIP_ROI_NAME = "Snip Translate"
 
+
 class OverlayTab(BaseTab):
     DEFAULT_CONFIG = DEFAULT_SINGLE_OVERLAY_CONFIG
     JUSTIFY_OPTIONS = ["left", "center", "right"]
@@ -54,7 +55,6 @@ class OverlayTab(BaseTab):
         for widget in frame.winfo_children():
             widget.destroy()
         self.widgets = {}
-
         frame.columnconfigure(1, weight=1)
         frame.columnconfigure(3, weight=0)
         row_num = 0
@@ -92,8 +92,7 @@ class OverlayTab(BaseTab):
         font_color_entry.bind("<FocusOut>", lambda e, key='font_color': self.update_color_preview(key))
         font_color_entry.bind("<Return>", lambda e, key='font_color': self.update_color_preview(key))
         self.widgets['font_color_btn'] = ttk.Button(
-            frame, text="🎨", width=3,
-            command=lambda: self.choose_color('font_color', 'Font Color')
+            frame, text="🎨", width=3, command=lambda: self.choose_color('font_color', 'Font Color')
         )
         self.widgets['font_color_btn'].grid(row=row_num, column=2, sticky=tk.W, padx=(0, 5), pady=2)
         self.widgets['font_color_preview'] = tk.Label(frame, text="   ", relief=tk.SUNKEN, width=3, borderwidth=1)
@@ -108,8 +107,7 @@ class OverlayTab(BaseTab):
         bg_color_entry.bind("<FocusOut>", lambda e, key='bg_color': self.update_color_preview(key))
         bg_color_entry.bind("<Return>", lambda e, key='bg_color': self.update_color_preview(key))
         self.widgets['bg_color_btn'] = ttk.Button(
-            frame, text="🎨", width=3,
-            command=lambda: self.choose_color('bg_color', 'Background Color')
+            frame, text="🎨", width=3, command=lambda: self.choose_color('bg_color', 'Background Color')
         )
         self.widgets['bg_color_btn'].grid(row=row_num, column=2, sticky=tk.W, padx=(0, 5), pady=2)
         self.widgets['bg_color_preview'] = tk.Label(frame, text="   ", relief=tk.SUNKEN, width=3, borderwidth=1)
@@ -157,11 +155,10 @@ class OverlayTab(BaseTab):
         self.set_widgets_state(tk.DISABLED)
 
     def _update_alpha_label(self, value):
-        if 'alpha_label_var' in self.widgets:
-            try:
-                self.widgets['alpha_label_var'].set(f"{float(value):.2f}")
-            except:
-                pass
+        try:
+            self.widgets['alpha_label_var'].set(f"{float(value):.2f}")
+        except Exception:
+            pass
 
     def update_color_preview(self, config_key):
         var = self.widgets.get(f"{config_key}_var")
@@ -200,7 +197,7 @@ class OverlayTab(BaseTab):
             self.config_frame.config(text="Overlay Appearance Settings (No Selection)")
             return
         is_snip_config = (roi_name == SNIP_ROI_NAME)
-        config_label = f"Appearance Settings for [Snip Window]" if is_snip_config else f"Appearance Settings for [{roi_name}]"
+        config_label = "Appearance Settings for [Snip Window]" if is_snip_config else f"Appearance Settings for [{roi_name}]"
         self.config_frame.config(text=config_label)
         config = get_overlay_config_for_roi(roi_name)
         try:
@@ -223,9 +220,9 @@ class OverlayTab(BaseTab):
             enable_widgets = global_state or is_snip_config
             self.set_widgets_state(tk.NORMAL if enable_widgets else tk.DISABLED)
             if is_snip_config:
-                if 'enabled_check' in self.widgets and self.widgets['enabled_check'].winfo_exists():
+                if self.widgets['enabled_check'].winfo_exists():
                     self.widgets['enabled_check'].config(state=tk.DISABLED)
-                if 'reset_geom_button' in self.widgets and self.widgets['reset_geom_button'].winfo_exists():
+                if self.widgets['reset_geom_button'].winfo_exists():
                     self.widgets['reset_geom_button'].config(state=tk.DISABLED)
         except tk.TclError:
             print("Error updating overlay config UI elements")
@@ -251,9 +248,6 @@ class OverlayTab(BaseTab):
         except (ValueError, tk.TclError) as e:
             messagebox.showerror("Error Reading Value", f"Could not read setting: {e}", parent=self.app.master)
             return
-        except Exception as e:
-            messagebox.showerror("Error Reading Value", f"Unexpected error: {e}", parent=self.app.master)
-            return
         if not 8 <= new_appearance_config['font_size'] <= 72:
             messagebox.showerror("Error", "Font size must be 8-72.", parent=self.app.master)
             return
@@ -273,9 +267,8 @@ class OverlayTab(BaseTab):
         if save_overlay_config_for_roi(roi_name, new_appearance_config):
             config_type = "Snip window appearance" if is_snip_config else f"Overlay appearance for {roi_name}"
             self.app.update_status(f"{config_type} saved.")
-            if hasattr(self.app, 'roi_tab'):
-                if not is_snip_config:
-                    self.app.roi_tab.update_roi_list()
+            if hasattr(self.app, 'roi_tab') and not is_snip_config:
+                self.app.roi_tab.update_roi_list()
             if not is_snip_config and hasattr(self.app, 'overlay_manager'):
                 self.app.overlay_manager.update_overlay_config(roi_name, new_appearance_config)
         else:
@@ -325,10 +318,8 @@ class OverlayTab(BaseTab):
     def set_widgets_state(self, state):
         if not hasattr(self, 'config_frame') or not self.config_frame.winfo_exists():
             return
-        valid_tk_states = (tk.NORMAL, tk.DISABLED, tk.ACTIVE)
         combobox_state = 'readonly' if state == tk.NORMAL else tk.DISABLED
-        scale_state = tk.NORMAL if state == tk.NORMAL else tk.DISABLED
-        actual_state = state if state in valid_tk_states else tk.DISABLED
+        actual_state = state
         container_frames = [self.config_frame]
         button_frame = next((w for w in self.config_frame.winfo_children() if isinstance(w, ttk.Frame)), None)
         if button_frame:
@@ -342,22 +333,21 @@ class OverlayTab(BaseTab):
                     elif widget_class == 'TCombobox':
                         widget.configure(state=combobox_state)
                     elif widget_class in ('Scale', 'TScale'):
-                        widget.configure(state=scale_state)
+                        widget.configure(state=state)
                 except tk.TclError:
                     pass
-                except Exception as e:
-                    print(f"Error setting state for {widget_class}: {e}")
         roi_name = self.selected_roi_var.get()
-        is_snip_config = (roi_name == SNIP_ROI_NAME)
-        if is_snip_config:
-            if 'enabled_check' in self.widgets and self.widgets['enabled_check'].winfo_exists():
+        if roi_name == SNIP_ROI_NAME:
+            if self.widgets.get('enabled_check') and self.widgets['enabled_check'].winfo_exists():
                 self.widgets['enabled_check'].config(state=tk.DISABLED)
-            if 'reset_geom_button' in self.widgets and self.widgets['reset_geom_button'].winfo_exists():
+            if self.widgets.get('reset_geom_button') and self.widgets['reset_geom_button'].winfo_exists():
                 self.widgets['reset_geom_button'].config(state=tk.DISABLED)
-        apply_button = next(
-            (w for w in button_frame.winfo_children() if isinstance(w, ttk.Button) and w.cget('text') == "Apply Appearance"),
-            None
-        ) if button_frame else None
+        apply_button = None
+        if button_frame:
+            for w in button_frame.winfo_children():
+                if isinstance(w, ttk.Button) and w.cget('text') == "Apply Appearance":
+                    apply_button = w
+                    break
         if apply_button:
             apply_button_state = tk.NORMAL if roi_name and actual_state == tk.NORMAL else tk.DISABLED
             try:

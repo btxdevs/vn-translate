@@ -25,6 +25,7 @@ class FloatingOverlayWindow(tk.Toplevel):
         self._resize_start_y = 0
         self._resize_start_width = 0
         self._resize_start_height = 0
+
         self.content_frame = tk.Frame(self, bg=self.config.get('bg_color', '#222222'))
         self.content_frame.pack(fill=tk.BOTH, expand=True)
         self.label_var = tk.StringVar()
@@ -33,9 +34,11 @@ class FloatingOverlayWindow(tk.Toplevel):
         self.label.grid(row=0, column=0, sticky="nsew")
         self.content_frame.grid_rowconfigure(0, weight=1)
         self.content_frame.grid_columnconfigure(0, weight=1)
+
         self.grip_size = 10
         self.grip = tk.Frame(self, width=self.grip_size, height=self.grip_size, bg='grey50', cursor="bottom_right_corner")
         self.grip.place(relx=1.0, rely=1.0, anchor='se')
+
         self.bind("<ButtonPress-1>", self.on_press)
         self.bind("<B1-Motion>", self.on_drag)
         self.bind("<ButtonRelease-1>", self.on_release)
@@ -86,8 +89,6 @@ class FloatingOverlayWindow(tk.Toplevel):
                 if self.config.get('geometry') != current_geometry:
                     self.config['geometry'] = current_geometry
                     save_overlay_config_for_roi(self.roi_name, {'geometry': current_geometry})
-            else:
-                pass
         except (tk.TclError, Exception):
             pass
 
@@ -130,25 +131,21 @@ class FloatingOverlayWindow(tk.Toplevel):
                 return
         except tk.TclError:
             return
-        manager_global_state = global_overlays_enabled
-        if self.manager:
-            manager_global_state = self.manager.global_overlays_enabled
-        elif self.roi_name == "_snip_translate":
-            manager_global_state = True
-        is_individually_enabled = self.config.get('enabled', True)
-        should_be_visible_if_enabled = manager_global_state and is_individually_enabled
+        manager_global_state = self.manager.global_overlays_enabled if self.manager else True
+        is_enabled = self.config.get('enabled', True)
+        should_be_visible = manager_global_state and is_enabled
         self.update_idletasks()
         try:
             is_visible = self.state() == 'normal'
         except tk.TclError:
             return
-        if should_be_visible_if_enabled and bool(text) and not is_visible:
+        if should_be_visible and text and not is_visible:
             try:
                 self.deiconify()
                 self.lift()
             except tk.TclError:
                 pass
-        elif not should_be_visible_if_enabled and is_visible:
+        elif not should_be_visible and is_visible:
             try:
                 self.withdraw()
             except tk.TclError:
@@ -164,9 +161,7 @@ class FloatingOverlayWindow(tk.Toplevel):
         self._apply_alpha()
         if needs_geom_reload:
             self._load_geometry()
-        manager_global_state = True
-        if self.manager:
-            manager_global_state = self.manager.global_overlays_enabled
+        manager_global_state = self.manager.global_overlays_enabled if self.manager else True
         self.update_text(self.label_var.get(), global_overlays_enabled=manager_global_state)
 
     def on_press(self, event):
@@ -208,7 +203,6 @@ class FloatingOverlayWindow(tk.Toplevel):
             self._resize_start_height = self.winfo_height()
         except tk.TclError:
             self._resizing = False
-            return
 
     def on_resize_drag(self, event):
         if not self._resizing:

@@ -1,8 +1,8 @@
-# Visual Novel Translator
+# AI Visual Novel Translator
 
 ## Introduction
 
-Visual Novel Translator is a desktop application designed to assist users in reading visual novels (or other screen content) in foreign languages. It captures text from a selected application window using specified Regions of Interest (ROIs), performs Optical Character Recognition (OCR) on these regions, translates the extracted text using AI language models, and displays the results, primarily through customizable floating overlay windows.
+vn-translate is a desktop application designed to assist users in reading visual novels (or other screen content) in foreign languages. It captures text from a selected application window using specified Regions of Interest (ROIs), performs Optical Character Recognition (OCR) on these regions, translates the extracted text using AI language models, and displays the results, primarily through customizable floating overlay windows.
 
 It offers flexibility through multiple OCR engines, various translation service presets, per-game configurations, and features like color filtering for improved text extraction and a quick "Snip & Translate" tool.
 

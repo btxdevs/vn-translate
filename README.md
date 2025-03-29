@@ -70,7 +70,7 @@ The `setup_and_run.bat` script automates the creation of a virtual environment a
 2.  **Open Terminal:** Open a Command Prompt (`cmd.exe`) or PowerShell window.
 3.  **Navigate:** Use the `cd` command to navigate into the directory where you placed the application files.
     ```bash
-    cd path\to\visual-novel-translator
+    cd path\to\vn-translate
     ```
 4.  **Run Script:** Execute the setup script:
     ```bash

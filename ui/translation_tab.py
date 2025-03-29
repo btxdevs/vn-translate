@@ -599,8 +599,12 @@ class TranslationTab(BaseTab):
                 self.translation_display.insert(tk.END, f"{status_msg}\n")
                 self.translation_display.config(state=tk.DISABLED)
         except tk.TclError: pass
+
+        # Update overlays to show "..." while translating
         if hasattr(self.app, 'overlay_manager'):
-            for roi_name in texts_to_translate: self.app.overlay_manager.update_overlay(roi_name, "...")
+            for roi_name in texts_to_translate:
+                # *** CORRECTED LINE BELOW ***
+                self.app.overlay_manager.update_overlay_text(roi_name, "...")
 
         # Keep a reference to the input dictionary for preview construction
         input_texts_for_preview = texts_to_translate.copy()
@@ -624,9 +628,12 @@ class TranslationTab(BaseTab):
                     if hasattr(self.app, 'overlay_manager'):
                         first_roi = next(iter(texts_to_translate), None)
                         if first_roi:
-                            self.app.master.after_idle(lambda name=first_roi: self.app.overlay_manager.update_overlay(name, f"Error!"))
-                            for r_name in texts_to_translate:
-                                if r_name != first_roi: self.app.master.after_idle(lambda n=r_name: self.app.overlay_manager.update_overlay(n, ""))
+                            # *** CORRECTED LINE BELOW ***
+                            self.app.master.after_idle(lambda name=first_roi: self.app.overlay_manager.update_overlay_text(name, f"Error!"))
+                        for r_name in texts_to_translate:
+                            if r_name != first_roi:
+                                # *** CORRECTED LINE BELOW ***
+                                self.app.master.after_idle(lambda n=r_name: self.app.overlay_manager.update_overlay_text(n, ""))
                 else:
                     print("Translation successful.")
                     preview_lines = []

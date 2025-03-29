@@ -12,7 +12,7 @@ class FloatingOverlayWindow(tk.Toplevel):
     def __init__(self, master, roi_name, initial_config, manager_ref):
         super().__init__(master)
         self.roi_name = roi_name
-        self.config = initial_config
+        self.config = initial_config.copy() # Use a copy to avoid shared references
         self.master = master
         self.manager = manager_ref # Reference to OverlayManager or None
 
@@ -80,9 +80,10 @@ class FloatingOverlayWindow(tk.Toplevel):
         self.grip.bind("<B1-Motion>", self.on_resize_drag)
         self.grip.bind("<ButtonRelease-1>", self.on_resize_release)
 
-        # Load initial size/position and hide
+        # Load initial size/position
         self._load_geometry()
-        self.withdraw() # Start hidden
+        # Set initial visibility based on config and global state
+        self._update_visibility()
 
     def _apply_alpha(self):
         """Applies the alpha (transparency) setting from the config."""
@@ -208,26 +209,31 @@ class FloatingOverlayWindow(tk.Toplevel):
         self.content_frame.config(bg=bg_color)
         self.configure(background=bg_color) # Window background
 
-    def update_text(self, text, global_overlays_enabled=True):
-        """Updates the label text and manages window visibility."""
+    def update_text(self, text):
+        """Updates the label text variable. Does NOT control visibility."""
         # Ensure text is a string
         if not isinstance(text, str):
             text = str(text)
 
         # Update text variable only if changed
         if text != self.label_var.get():
-            self.label_var.set(text)
+            try:
+                # Check if window still exists before setting var
+                if self.winfo_exists():
+                    self.label_var.set(text)
+            except tk.TclError:
+                return # Window is gone
 
-        # Check if window still exists before proceeding
+    def _update_visibility(self):
+        """Shows or hides the window based on global and individual enabled states."""
         try:
             if not self.winfo_exists():
                 return
         except tk.TclError:
             return # Window is gone
 
-        # Determine if the window *should* be visible
-        manager_global_state = global_overlays_enabled
-        # If managed, get global state from manager
+        # Determine if the window *should* be visible based on enabled states
+        manager_global_state = True # Default if no manager
         if self.manager and hasattr(self.manager, 'global_overlays_enabled'):
             manager_global_state = self.manager.global_overlays_enabled
         # Snip window is always considered globally enabled when it exists
@@ -235,7 +241,7 @@ class FloatingOverlayWindow(tk.Toplevel):
             manager_global_state = True
 
         is_individually_enabled = self.config.get('enabled', True)
-        should_be_visible = manager_global_state and is_individually_enabled and bool(text)
+        should_be_visible = manager_global_state and is_individually_enabled
 
         # Get current visibility state
         try:
@@ -254,10 +260,15 @@ class FloatingOverlayWindow(tk.Toplevel):
                 self.withdraw() # Hide
             except tk.TclError: pass # Ignore if destroyed mid-operation
 
-
     def update_config(self, new_config):
         """Applies a new configuration dictionary to the window."""
         needs_geom_reload = False
+        enabled_state_changed = False
+
+        # Check if 'enabled' state is changing
+        if 'enabled' in new_config and new_config['enabled'] != self.config.get('enabled'):
+            enabled_state_changed = True
+
         # Check if geometry needs reloading (e.g., reset button)
         if 'geometry' in new_config and new_config['geometry'] != self.config.get('geometry'):
             # If new geometry is explicitly None, trigger reload/reset
@@ -293,12 +304,9 @@ class FloatingOverlayWindow(tk.Toplevel):
                 print(f"Warning: Failed to apply specific geometry '{new_config['geometry']}' for {self.roi_name}")
                 self._load_geometry() # Fallback to load/default
 
-
-        # Update visibility based on potentially changed 'enabled' state
-        manager_global_state = True
-        if self.manager and hasattr(self.manager, 'global_overlays_enabled'):
-            manager_global_state = self.manager.global_overlays_enabled
-        self.update_text(self.label_var.get(), global_overlays_enabled=manager_global_state)
+        # Update visibility if the 'enabled' state changed or geometry was reset
+        if enabled_state_changed or needs_geom_reload:
+            self._update_visibility()
 
     # --- Dragging Methods ---
     def on_press(self, event):
@@ -308,7 +316,20 @@ class FloatingOverlayWindow(tk.Toplevel):
         while widget is not None:
             if widget == self.grip or getattr(widget, '_is_close_button', False):
                 return # Do not start drag if click is on grip or close button
+            # Check if the widget is the label itself, allow drag
+            if widget == self.label:
+                break
+            # Check if the widget is the content frame, allow drag
+            if widget == self.content_frame:
+                break
+            # Check if the widget is the main Toplevel window, allow drag
+            if widget == self:
+                break
             widget = widget.master # Check parent widget
+
+        # If the loop finished without breaking (i.e., widget is None or not allowed), return
+        if widget is None:
+            return
 
         # Start dragging state
         self._offset_x = event.x
@@ -421,5 +442,23 @@ class ClosableFloatingOverlayWindow(FloatingOverlayWindow):
         """Override save_geometry for closable windows (like snip) to prevent saving."""
         # print(f"Skipping geometry save for closable window: {self.roi_name}") # Debug
         pass # Do not save geometry for temporary/closable windows
+
+    def _update_visibility(self):
+        """Override visibility for closable windows - they are always visible when they exist."""
+        try:
+            if not self.winfo_exists():
+                return
+            # Ensure it's shown if it exists
+            if self.state() != 'normal':
+                self.deiconify()
+                self.lift()
+        except tk.TclError:
+            pass # Ignore if destroyed mid-operation
+
+    def update_text(self, text):
+        """Updates text and ensures visibility for closable window."""
+        super().update_text(text)
+        # Ensure it remains visible after text update
+        self._update_visibility()
 
 # --- END OF FILE ui/floating_overlay_window.py ---

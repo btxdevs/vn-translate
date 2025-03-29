@@ -79,12 +79,12 @@ The `setup_and_run.bat` script automates the creation of a virtual environment a
     ```
 5.  **First Run:**
     *   The script will check for Python.
-    *   It will create a Python virtual environment named `venv` in the current directory.
+    *   It will create a Python virtual environment named `.venv` in the current directory.
     *   It will then install all dependencies listed in `requirements.txt` into this virtual environment. This step can take a significant amount of time, especially when downloading large libraries like PyTorch or PaddlePaddle. Please be patient.
-    *   If installation is successful, it will create a marker file (`.setup_complete`) inside the `venv` folder and then launch the Visual Novel Translator application.
+    *   If installation is successful, it will create a marker file (`.setup_complete`) inside the `.venv` folder and then launch the Visual Novel Translator application.
 6.  **Subsequent Runs:**
     *   Simply run `.\setup_and_run.bat` again.
-    *   The script will detect the `venv` folder and the `.setup_complete` file.
+    *   The script will detect the `.venv` folder and the `.setup_complete` file.
     *   It will skip the setup steps and directly launch the application using the Python interpreter from the existing virtual environment.
 
 **Troubleshooting (Script):**
@@ -92,7 +92,7 @@ The `setup_and_run.bat` script automates the creation of a virtual environment a
 *   If it fails during dependency installation:
     *   Check your internet connection.
     *   Look for specific error messages. You might be missing C++ Build Tools or have CUDA/cuDNN compatibility issues if installing GPU versions.
-    *   Consider deleting the `venv` folder and running the script again after addressing the underlying issue.
+    *   Consider deleting the `.venv` folder and running the script again after addressing the underlying issue.
 
 ### Manual Installation
 
@@ -103,20 +103,20 @@ Follow these steps if you prefer to set up the environment manually or encounter
 3.  **Navigate:** Use `cd` to navigate into the application's directory.
 4.  **Create Virtual Environment:** It's highly recommended to use a virtual environment to avoid conflicts with other Python projects.
     ```bash
-    python -m venv venv
+    python -m venv .venv
     ```
-    *(This creates a folder named `venv`)*
+    *(This creates a folder named `.venv`)*
 5.  **Activate Virtual Environment:** You need to activate the environment in your current terminal session.
     *   On Command Prompt:
         ```bash
-        .\venv\Scripts\activate.bat
+        .\.venv\Scripts\activate.bat
         ```
     *   On PowerShell:
         ```bash
-        .\venv\Scripts\Activate.ps1
+        .\.venv\Scripts\Activate.ps1
         ```
         *(If you get an error about execution policies in PowerShell, you might need to run: `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process` and try activating again)*
-    *   Your terminal prompt should now change to indicate the active environment (e.g., `(venv) C:\path\to\app>`).
+    *   Your terminal prompt should now change to indicate the active environment (e.g., `(.venv) C:\path\to\app>`).
 6.  **Install Dependencies:** Install all required packages from the `requirements.txt` file. The `--extra-index-url` for PyTorch/CUDA is included in the file and will be handled automatically by pip.
     ```bash
     pip install -r requirements.txt
@@ -128,11 +128,11 @@ Follow these steps if you prefer to set up the environment manually or encounter
     ```
 8.  **Running Subsequently:** To run the application after the initial setup:
     *   Navigate to the application directory in your terminal.
-    *   Activate the virtual environment (`.\venv\Scripts\activate`).
+    *   Activate the virtual environment (`.\.venv\Scripts\activate`).
     *   Run the application (`python main.py`).
 
 **Troubleshooting (Manual):**
-*   If `python -m venv venv` fails, ensure Python is installed correctly and in your PATH.
+*   If `python -m venv .venv` fails, ensure Python is installed correctly and in your PATH.
 *   If `pip install` fails, check error messages carefully. Ensure prerequisites (like C++ Build Tools or correct CUDA versions for GPU) are met.
 *   If PyTorch/PaddlePaddle GPU versions install but don't use the GPU, double-check your NVIDIA driver, CUDA, and cuDNN setup and compatibility. You can often test PyTorch CUDA availability in Python after activation: `python -c "import torch; print(torch.cuda.is_available())"` (should print `True`).
 

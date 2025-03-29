@@ -844,7 +844,7 @@ class VisualNovelTranslatorApp:
             self.current_snip_window.geometry(f"+{pos_x}+{pos_y}")
 
             # Update the text and ensure it's visible
-            self.current_snip_window.update_text(text, global_overlays_enabled=True) # Force show
+            self.current_snip_window.update_text(text) # Force show
 
         except Exception as e:
             print(f"Error creating snip result window: {e}")

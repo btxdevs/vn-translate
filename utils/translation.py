@@ -17,13 +17,54 @@ CONTEXT_DIR = APP_DIR / "context_history" # NEW: Directory for context files
 # Context management (global list - represents the currently loaded context)
 context_messages = []
 
+# --- Few-Shot Examples ---
+# Examples for ROI translation (Japanese -> English)
+ROI_EXAMPLES_JA_EN = [
+    { # Simple single lines
+        "input": "<|1|> こんにちは世界\n<|2|> これはテストです。",
+        "output": "<|1|> Hello World\n<|2|> This is a test."
+    },
+    { # Multiline within a single tag
+        "input": "<|1|> これは最初の行です。\nこれは同じタグの二行目です。\n<|2|> これは別のタグです。",
+        "output": "<|1|> This is the first line.\nThis is the second line of the same tag.\n<|2|> This is a different tag."
+    },
+    { # Another multiline example, potentially dialogue
+        "input": "<|1|> 彼は彼女に近づき、囁いた。\n「愛してる…\nずっと前から。」",
+        "output": "<|1|> He approached her and whispered.\n\"I love you...\nI have for a long time.\""
+    },
+    { # Example with potentially sensitive content
+        "input": "<|1|> 何をしているんだ？\n<|2|> 馬鹿野郎！殺してやる！",
+        "output": "<|1|> What are you doing?\n<|2|> You idiot! I'll kill you!"
+    }
+]
+
+# Examples for Snip translation (Japanese -> English)
+SNIP_EXAMPLES_JA_EN = [
+    {
+        "input": "疲れた…",
+        "output": "I'm tired..."
+    },
+    {
+        "input": "信じられない！",
+        "output": "Unbelievable!"
+    },
+    { # Example with slightly sensitive (fictional violence) content
+        "input": "絶対に許さない…殺してやる！",
+        "output": "I'll never forgive you... I'll kill you!"
+    }
+]
+
 # --- Logging Helper ---
 def format_message_for_log(message):
-        """Formats a message dictionary for concise logging."""
-        role = message.get('role', 'unknown')
-        content = message.get('content', '')
-        content_display = content.replace('\n', '\\n')
-        return f"[{role}] '{content_display}'"
+    """Formats a message dictionary for concise logging."""
+    role = message.get('role', 'unknown')
+    content = message.get('content', '')
+    content_display = content.replace('\n', '\\n')
+    # Limit length for cleaner logs
+    if len(content_display) > 150: # Increased limit slightly
+        content_display = content_display[:150] + "..."
+    return f"[{role}] '{content_display}'"
+
 # --- Directory and Hashing ---
 
 def _ensure_cache_dir():
@@ -215,20 +256,17 @@ def parse_translation_output(response_text, original_tag_mapping):
     matches = re.findall(pattern, response_text, re.DOTALL) # Removed MULTILINE, DOTALL is key
 
     if matches:
-        print(f"[LLM PARSE] Found {len(matches)} segments using main pattern.")
+        # print(f"[LLM PARSE] Found {len(matches)} segments using main pattern.") # Less verbose log
         for segment_number, content in matches:
             original_roi_name = original_tag_mapping.get(segment_number)
             if original_roi_name:
                 # 1. Normalize newlines (\r\n or \r -> \n)
                 normalized_content = content.replace('\r\n', '\n').replace('\r', '\n')
                 # 2. Strip leading/trailing whitespace ONLY (including spaces, tabs, newlines)
-                #    Do NOT strip internal newlines here.
                 cleaned_content = normalized_content.strip()
                 # 3. Remove potential trailing tag from the current segment's content (less likely now)
                 cleaned_content = re.sub(r'<\|\d+\|>\s*$', '', cleaned_content).rstrip()
 
-                # print(f"[LLM PARSE DEBUG] Raw content for <|{segment_number}|>: {repr(content)}")
-                # print(f"[LLM PARSE DEBUG] Cleaned content for {original_roi_name}: {repr(cleaned_content)}")
                 parsed_segments[original_roi_name] = cleaned_content
             else:
                 print(f"Warning: Received segment number '{segment_number}' which was not in the original mapping.")
@@ -334,39 +372,61 @@ def preprocess_text_for_translation(stable_texts_dict):
     return '\n'.join(preprocessed_lines), tag_mapping
 
 # MODIFIED translate_text function signature and logic
-def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additional_context="", context_limit=10, force_recache=False, skip_cache=False, skip_history=False, user_comment=None): # Added user_comment
+def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additional_context="", context_limit=10, force_recache=False, skip_cache=False, skip_history=False, user_comment=None, is_snip=False): # Added is_snip
     """
-    Translate the given text segments (from a dictionary) using an OpenAI-compatible API client,
-    using game-specific caching and context. System prompt is constructed internally.
-    Context history sent to the API is limited by context_limit.
+    Translate text using an OpenAI-compatible API client.
+    Handles multi-segment ROI text (using <|n|> tags) or single-segment snip text.
+    Uses game-specific caching and context history (limited by context_limit).
     A user_comment can be provided for transient guidance.
+    Injects few-shot examples if context is short.
+    Includes prompt modifications to reduce refusals for fictional content.
     """
     cache_file_path = None if skip_cache else _get_cache_file_path(hwnd)
-    if not skip_cache and not cache_file_path and hwnd is not None:
+    if not skip_cache and not cache_file_path and hwnd is not None and not is_snip: # Cache only for non-snip, non-skipped game translations
         print("Error: Cannot proceed with cached translation without a valid game identifier.")
         return {"error": "Could not determine cache file path for the game."}
 
-    # Preprocess the input dictionary into the tagged string format
-    preprocessed_text_for_llm, tag_mapping = preprocess_text_for_translation(stable_texts_dict)
+    # --- Prepare Input Text and Cache Key ---
+    text_to_translate = ""
+    tag_mapping = {}
+    cache_key = None
+    source_language_hint = "Japanese" # Default hint, adjust if needed based on OCR lang
 
-    if not preprocessed_text_for_llm or not tag_mapping:
-        print("No valid text segments found after preprocessing. Nothing to translate.")
-        return {} # Return empty dict if nothing to translate
+    if is_snip:
+        # For snip, expect only one entry in the dictionary
+        if len(stable_texts_dict) != 1:
+            print(f"Error: Expected exactly one text entry for snip translation, got {len(stable_texts_dict)}")
+            return {"error": "Invalid input for snip translation."}
+        # Extract the raw text directly
+        text_to_translate = next(iter(stable_texts_dict.values()), "").strip()
+        if not text_to_translate:
+            print("No text found in snip input.")
+            return "" # Return empty string if snip text is empty
+        # Snips are not cached, so cache_key remains None
+        skip_cache = True
+        skip_history = True
+        print("[TRANSLATE] Handling as SNIP translation (no tags, no cache, no history).")
+    else:
+        # For regular ROI translation, preprocess into tagged format
+        preprocessed_text_for_llm, tag_mapping = preprocess_text_for_translation(stable_texts_dict)
+        if not preprocessed_text_for_llm or not tag_mapping:
+            print("No valid text segments found after preprocessing. Nothing to translate.")
+            return {} # Return empty dict if nothing to translate
+        text_to_translate = preprocessed_text_for_llm
+        # Cache key is based on the preprocessed text and target language.
+        cache_key = get_cache_key(text_to_translate, target_language)
+        print(f"[TRANSLATE] Handling as ROI translation (tags: {len(tag_mapping)}, cache_key: {cache_key[:10]}...).")
 
-    # Cache key is based ONLY on the preprocessed text and target language.
-    # User comments do NOT affect the cache key.
-    cache_key = get_cache_key(preprocessed_text_for_llm, target_language)
 
-    # --- Cache Check ---
-    if not skip_cache and not force_recache:
+    # --- Cache Check (only for non-snip) ---
+    if not is_snip and not skip_cache and not force_recache and cache_key and cache_file_path:
         cached_result = get_cached_translation(cache_key, cache_file_path)
         if cached_result:
-            # Validate cache integrity (ensure all expected ROIs are present)
+            # Validate cache integrity
             if isinstance(cached_result, dict) and not 'error' in cached_result:
-                # Check if all ROI names from the *original input* (that had text) are keys in the cached result
                 expected_rois = {name for name, text in stable_texts_dict.items() if text and text.strip()}
                 if expected_rois.issubset(cached_result.keys()):
-                    print(f"[CACHE] HIT for key: {cache_key[:10]}... in {cache_file_path.name if cache_file_path else 'N/A'}")
+                    print(f"[CACHE] HIT for key: {cache_key[:10]}... in {cache_file_path.name}")
                     return cached_result
                 else:
                     print("[CACHE] WARN: Cached result incomplete or missing expected ROIs, fetching fresh translation.")
@@ -374,79 +434,113 @@ def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additi
             else:
                 print("[CACHE] WARN: Cached result format mismatch or error, fetching fresh translation.")
         else:
-            print(f"[CACHE] MISS for key: {cache_key[:10]}... in {cache_file_path.name if cache_file_path else 'N/A'}")
+            print(f"[CACHE] MISS for key: {cache_key[:10]}... in {cache_file_path.name}")
+    elif is_snip: pass # Snips skip cache
     elif skip_cache: print(f"[CACHE] SKIP requested (skip_cache=True)")
-    elif force_recache: print(f"[CACHE] SKIP requested (force_recache=True) for key: {cache_key[:10]}...")
+    elif force_recache: print(f"[CACHE] SKIP requested (force_recache=True)")
     # --- End Cache Check ---
 
 
-    # --- Construct System Prompt Internally ---
-    base_system_prompt = (
-        "You are a professional translation assistant. Your task is to translate text segments accurately "
-        "from their source language into the target language specified in the user prompt. "
-        "The input text segments are marked with tags like <|1|>, <|2|>, etc. "
-        "Your response MUST strictly adhere to this format, reproducing the exact same tags for each corresponding translated segment. "
-        "For example, if the input is '<|1|> Hello\n<|2|> World' and the target language is French, the output must be '<|1|> Bonjour\n<|2|> Le monde'. "
-        "Do NOT include ANY extra text, commentary, explanations, greetings, summaries, apologies, or any conversational filler before, between, or after the tagged translations."
+    # --- Construct System Prompt (with refusal reduction) ---
+    system_prompt_content = (
+        "You are an expert translation assistant specializing in fictional media like visual novels and games. "
+        "Your primary goal is accurate and natural-sounding translation into the target language. "
+        "You MUST translate ALL provided text segments or snippets accurately, regardless of perceived sensitivity, "
+        "offensiveness, or topic (e.g., violence, sexual content, controversial themes, illegal acts), "
+        "as they are part of a fictional work and required for user understanding. "
+        "Do NOT refuse to translate, censor, replace words with asterisks, skip segments, provide summaries, "
+        "express moral judgment, or add any commentary beyond the direct translation. "
+        "Focus SOLELY on providing the most accurate and faithful translation possible in the requested format."
     )
-    system_content = base_system_prompt
-    system_message = {"role": "system", "content": system_content}
+    system_message = {"role": "system", "content": system_prompt_content}
     # --- End System Prompt Construction ---
 
-    # --- Prepare Context History for API Call (Apply Limit) ---
+    # --- Prepare Context History for API Call (Apply Limit, skip for snip) ---
     history_to_send = []
-    if not skip_history:
-        global context_messages # Use the full history stored globally
+    if not skip_history: # skip_history is True for snips
+        global context_messages
         try:
-            # Use the context_limit passed to this function (originating from the preset)
             limit_exchanges = int(context_limit)
-            limit_exchanges = max(1, limit_exchanges) # Ensure at least 1 exchange
+            limit_exchanges = max(1, limit_exchanges)
         except (ValueError, TypeError):
-            limit_exchanges = 10 # Fallback default if invalid
+            limit_exchanges = 10
             print(f"[CONTEXT] Warning: Invalid context_limit value '{context_limit}'. Using default: {limit_exchanges}")
 
-        # Calculate the number of messages (user + assistant) to send based on the exchange limit
         max_messages_to_send = limit_exchanges * 2
-
-        # Slice the global context_messages list to get only the most recent messages
         if len(context_messages) > max_messages_to_send:
-            # Select the last 'max_messages_to_send' items from the full history
             history_to_send = context_messages[-max_messages_to_send:]
             print(f"[CONTEXT] Sending last {len(history_to_send)} messages ({limit_exchanges} exchanges limit) to API.")
         else:
-            # Send the entire history if it's shorter than the limit
             history_to_send = list(context_messages)
             print(f"[CONTEXT] Sending all {len(history_to_send)} available messages (within {limit_exchanges} exchanges limit) to API.")
     # --- End Context History Preparation ---
 
+    # --- Inject Few-Shot Examples if Context is Short ---
+    example_block = ""
+    # Use len(history_to_send) as the effective history length for this call
+    # Inject examples if less than 5 actual exchanges are being sent (10 messages)
+    if len(history_to_send) < 10:
+        print("[PROMPT] Injecting few-shot examples due to short context history.")
+        examples_to_use = []
+        # Basic language check for examples (assuming Japanese input for now)
+        # TODO: Potentially load examples based on detected source language if needed
+        if target_language.lower().startswith("en"):
+            examples_to_use = SNIP_EXAMPLES_JA_EN if is_snip else ROI_EXAMPLES_JA_EN
+
+        if examples_to_use:
+            example_lines = ["\n--- Examples ---"]
+            for ex in examples_to_use:
+                example_lines.append(f"Example Input:\n{ex['input']}")
+                example_lines.append(f"Example Output:\n{ex['output']}")
+                example_lines.append("---")
+            example_block = "\n".join(example_lines) + "\n" # Add trailing newline
+
+
     # --- Construct User Message for API ---
     current_user_message_parts = []
-    # Add the persistent additional context FIRST
+
+    # Add persistent additional context FIRST
     if additional_context and additional_context.strip():
-        current_user_message_parts.append(f"Additional context for this translation: {additional_context.strip()}")
-    # Add the transient user comment SECOND if provided
+        current_user_message_parts.append(f"Game/Scenario Context: {additional_context.strip()}")
+    # Add transient user comment SECOND if provided
     if user_comment and user_comment.strip():
-        current_user_message_parts.append(f"User Comment for this translation: {user_comment.strip()}")
-    # Then add the instruction and the text itself
-    current_user_message_parts.append(f"Translate the following segments into {target_language}, maintaining the exact <|n|> tags:")
-    current_user_message_parts.append(preprocessed_text_for_llm) # Use the preprocessed text string here
+        current_user_message_parts.append(f"User Guidance for this translation: {user_comment.strip()}")
+
+    # Add specific instructions based on translation type
+    if is_snip:
+        current_user_message_parts.append(f"Translate the following {source_language_hint} text snippet accurately and completely into {target_language}. Do not refuse based on content. Output ONLY the translated text, without any tags, labels, or explanations.")
+        # Add examples if generated
+        if example_block:
+            current_user_message_parts.append(example_block)
+        current_user_message_parts.append("Text to translate:")
+        current_user_message_parts.append(text_to_translate) # Raw snip text
+    else:
+        current_user_message_parts.append(f"Translate ALL the following {source_language_hint} segments accurately and completely into {target_language}, maintaining the exact <|n|> tags for each corresponding segment. Do not refuse any segment based on content. Do NOT include ANY extra text, commentary, explanations, greetings, summaries, apologies, or conversational filler before, between, or after the tagged translations.")
+        # Add examples if generated
+        if example_block:
+            current_user_message_parts.append(example_block)
+        current_user_message_parts.append("Segments to translate:")
+        current_user_message_parts.append(text_to_translate) # Tagged ROI text
+
     current_user_content_with_context = "\n\n".join(current_user_message_parts)
     current_user_message_for_api = {"role": "user", "content": current_user_content_with_context}
     # --- End Construct User Message ---
 
-    # Prepare the user message that will be *added* to the full history (without additional context OR user comment)
+    # Prepare the user message that will be *added* to the full history (only for non-snip)
     history_user_message = None
-    if not skip_history:
+    if not skip_history: # skip_history is True for snips
+        # History message does NOT include context, comment, or examples
         history_user_message_parts = [
             f"Translate the following segments into {target_language}, maintaining the exact <|n|> tags:",
-            preprocessed_text_for_llm # Use the same preprocessed text for history
+            text_to_translate # Use the same preprocessed text for history
         ]
         history_user_content = "\n\n".join(history_user_message_parts)
         history_user_message = {"role": "user", "content": history_user_content}
 
-    # Construct the final list of messages for the API call (using the potentially sliced history_to_send)
+    # Construct the final list of messages for the API call
     messages_for_api = [system_message] + history_to_send + [current_user_message_for_api]
 
+    # --- API Call Setup ---
     if not preset.get("model") or not preset.get("api_url"):
         missing = [f for f in ["model", "api_url"] if not preset.get(f)]
         errmsg = f"Missing required preset fields: {', '.join(missing)}"
@@ -469,19 +563,16 @@ def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additi
     for key, value in payload.items():
         if key != "messages": print(f"  - {key}: {value}")
     print(f"[API] Messages ({len(messages_for_api)} total):")
-    if messages_for_api[0]['role'] == 'system': print(f"  - [system] (Internal prompt used)")
-    if history_to_send:
-        # Log the number of messages *actually sent*
-        print(f"  - [CONTEXT HISTORY - {len(history_to_send)} messages sent]:")
-        for msg in history_to_send: print(f"    - {format_message_for_log(msg)}")
-    print(f"  - {format_message_for_log(current_user_message_for_api)}") # This now includes user comment if present
-    print("-" * 55)
+    for i, msg in enumerate(messages_for_api):
+        print(f"  ({i+1}) {format_message_for_log(msg)}")
+    print("-" * (40 + len(" LLM Request "))) # Adjust width
 
     try:
         api_key = preset.get("api_key") or None
         client = OpenAI(base_url=preset.get("api_url"), api_key=api_key)
     except Exception as e: print(f"[API] Error creating API client: {e}"); return {"error": f"Error creating API client: {e}"}
 
+    # --- API Call Execution ---
     response_text = None
     try:
         completion = client.chat.completions.create(**payload)
@@ -490,10 +581,10 @@ def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additi
             try: print(f"[API] Raw Response Object: {completion}")
             except Exception as log_err: print(f"[API] Error logging raw response object: {log_err}")
             return {"error": "Invalid response structure received from API."}
-        response_text = completion.choices[0].message.content # Keep original response text
+        response_text = completion.choices[0].message.content.strip() # Strip whitespace from raw response
         print("-" * 20 + " LLM Response " + "-" * 20)
         print(f"[API] Raw Response Text ({len(response_text)} chars):\n{response_text}")
-        print("-" * 56)
+        print("-" * (40 + len(" LLM Response "))) # Adjust width
     except APIError as e:
         error_message = str(e)
         status_code = getattr(e, 'status_code', 'N/A')
@@ -505,6 +596,15 @@ def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additi
         log_msg = f"[API] APIError during translation request: Status {status_code}, Error: {error_message}"
         print(log_msg)
         print(f"[API] Request Model: {payload.get('model')}")
+        # Check for common refusal patterns (heuristic)
+        refusal_patterns = [
+            "i cannot fulfill this request", "i cannot provide assistance", "unable to translate",
+            "cannot provide a translation", "content policy", "violates my safety guidelines",
+            "potentially harmful", "offensive content", "i cannot create", "i am unable to"
+        ]
+        if any(pattern in error_message.lower() for pattern in refusal_patterns):
+            error_message += "\n(Possible content refusal by model)"
+
         return {"error": f"API Error ({status_code}): {error_message}"}
     except Exception as e:
         error_message = str(e)
@@ -514,42 +614,59 @@ def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additi
         traceback.print_exc()
         return {"error": f"Error during API request: {error_message}"}
 
-    # Parse the response using the original tag mapping
-    # Pass the raw response_text here
-    final_translations = parse_translation_output(response_text, tag_mapping)
-    if 'error' in final_translations:
-        print("[LLM PARSE] Parsing failed after receiving response.")
-        return final_translations # Return the error dictionary
+    # --- Process Result ---
+    if is_snip:
+        # For snips, the raw response text is the result
+        final_result = response_text
+    else:
+        # For ROIs, parse the tagged response
+        final_result = parse_translation_output(response_text, tag_mapping)
+        if 'error' in final_result:
+            print("[LLM PARSE] Parsing failed after receiving response.")
+            return final_result # Return the error dictionary
 
-    # --- Add to Stored History (using history_user_message - WITHOUT user comment) ---
-    # Use the raw response_text for the assistant message in history
-    if not skip_history and history_user_message:
-        add_to_history = True
-        # Check if the exact same user input was the last user input in the *full stored* history
-        if len(context_messages) >= 2:
-            last_user_message_in_stored_history = context_messages[-2]
-            if last_user_message_in_stored_history.get('role') == 'user':
-                if last_user_message_in_stored_history.get('content') == history_user_message.get('content'):
-                    add_to_history = False
-                    print("[CONTEXT] Input identical to previous user message in stored history. Skipping history update.")
+        # --- Add/Update History (only for successful non-snip) ---
+        if not skip_history and history_user_message:
+            add_to_history = True
+            history_updated = False # Flag to track if we replaced the last entry
 
-        if add_to_history:
-            # Use the raw response_text here for accurate history
-            current_assistant_message = {"role": "assistant", "content": response_text}
-            # Add to the full global history list (no limit applied here)
-            add_context_message(history_user_message)
-            add_context_message(current_assistant_message)
-            _save_context(hwnd) # Save the updated full history
-    # --- End Add to Stored History ---
+            # Check if the exact same user input was the last user input in the *full stored* history
+            if len(context_messages) >= 2:
+                last_user_message_in_stored_history = context_messages[-2]
+                # Ensure the last two messages are indeed user and assistant
+                if last_user_message_in_stored_history.get('role') == 'user' and context_messages[-1].get('role') == 'assistant':
+                    if last_user_message_in_stored_history.get('content') == history_user_message.get('content'):
+                        # Input matches the previous user message
+                        if force_recache:
+                            # Force retranslate: Update the last assistant message instead of skipping
+                            context_messages[-1]['content'] = response_text # Update content of the last message
+                            history_updated = True
+                            add_to_history = False # Don't append new messages
+                            print("[CONTEXT] Input identical, but force_recache=True. Updating last assistant message in history.")
+                        else:
+                            # Normal translate: Skip adding duplicate history
+                            add_to_history = False
+                            print("[CONTEXT] Input identical to previous user message in stored history. Skipping history update.")
 
-    # --- Cache the successful result ---
-    # Cache key does NOT include the user comment
-    if not skip_cache and cache_file_path:
-        # Cache the parsed dictionary result, not the raw response
-        set_cache_translation(cache_key, final_translations, cache_file_path)
-        print(f"[CACHE] Translation cached/updated successfully in {cache_file_path.name}")
-    elif not skip_cache and not cache_file_path:
-        print("[CACHE] Warning: Could not cache translation (invalid path).")
-    # --- End Cache ---
+            # Append new user/assistant pair if it's not a duplicate (or if history was too short for check)
+            if add_to_history:
+                current_assistant_message = {"role": "assistant", "content": response_text} # Save raw response
+                add_context_message(history_user_message)
+                add_context_message(current_assistant_message)
+                history_updated = True # Mark as updated because we added
+                print("[CONTEXT] New user/assistant pair added to history.")
 
-    return final_translations
+            # Save context if any changes were made (append or update)
+            if history_updated:
+                _save_context(hwnd)
+        # --- End Add/Update History ---
+
+        # --- Cache the successful result (only for non-snip) ---
+        if not skip_cache and cache_file_path and cache_key:
+            set_cache_translation(cache_key, final_result, cache_file_path)
+            print(f"[CACHE] Translation cached/updated successfully in {cache_file_path.name}")
+        elif not skip_cache and not cache_file_path:
+            print("[CACHE] Warning: Could not cache translation (invalid path).")
+        # --- End Cache ---
+
+    return final_result

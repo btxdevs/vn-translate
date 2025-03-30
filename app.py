@@ -91,11 +91,12 @@ class VisualNovelTranslatorApp:
         # Setup UI components
         self._setup_ui()
         self.overlay_manager = OverlayManager(self.master, self) # Initialize OverlayManager
-        self.floating_controls = None
+        self.floating_controls = None # Initialize as None
 
         # Initialize OCR engine (now happens in background)
         self._trigger_ocr_initialization(self.ocr_engine_type, self.ocr_lang, initial_load=True)
-        self.show_floating_controls() # Show floating controls on startup
+        # Do NOT show floating controls on startup anymore
+        # self.show_floating_controls()
 
     def _ensure_dirs(self):
         """Creates necessary directories if they don't exist."""
@@ -122,6 +123,9 @@ class VisualNovelTranslatorApp:
         window_menu = tk.Menu(menu_bar, tearoff=0)
         menu_bar.add_cascade(label="Window", menu=window_menu)
         window_menu.add_command(label="Show Floating Controls", command=self.show_floating_controls)
+        # Add command to hide, although closing the window does the same
+        window_menu.add_command(label="Hide Floating Controls", command=self.hide_floating_controls)
+
 
         # --- Main Layout (Paned Window) ---
         self.paned_window = ttk.PanedWindow(self.master, orient=tk.HORIZONTAL)
@@ -421,6 +425,9 @@ class VisualNovelTranslatorApp:
         if hasattr(self, "overlay_manager"):
             self.overlay_manager.notify_capture_started()
 
+        # Show floating controls now that capture is active
+        self.show_floating_controls()
+
     def stop_capture(self):
         """Stops the capture loop."""
         if not self.capturing: return # Already stopped
@@ -457,6 +464,8 @@ class VisualNovelTranslatorApp:
             # Notify OverlayManager to hide overlays
             if hasattr(self, "overlay_manager"):
                 self.overlay_manager.notify_capture_stopped()
+            # Hide floating controls
+            self.hide_floating_controls()
             self.update_status("Capture stopped.")
         finally:
             # Reset the finalization flag
@@ -760,13 +769,13 @@ class VisualNovelTranslatorApp:
                 self.master.after_idle(lambda: self.display_snip_translation("[Translation Config Error]", screen_region))
                 return
 
-            # Use a dictionary for snip translation input
-            snip_tag_name = "_snip_translate"
+            # Use a dictionary for snip translation input (still needed for structure)
+            snip_tag_name = "_snip_translate" # Internal use only
             snip_input_dict = {snip_tag_name: extracted_text}
 
             print("[Snip Translate] Translating...")
             translation_result = translate_text(
-                stable_texts_dict=snip_input_dict, # Pass dictionary
+                stable_texts_dict=snip_input_dict, # Pass dictionary (will be handled differently inside)
                 hwnd=None, # No specific game window for snip cache/context
                 preset=config,
                 target_language=config["target_language"],
@@ -774,18 +783,17 @@ class VisualNovelTranslatorApp:
                 context_limit=0, # No context history for snips
                 skip_cache=True, # Don't cache snips
                 skip_history=True, # Don't add snips to history
-                user_comment=None # No user comment for snip
+                user_comment=None, # No user comment for snip
+                is_snip=True # Indicate this is a snip translation
             )
 
-            # 4. Process translation result
+            # 4. Process translation result (which should now be plain text for snips)
             final_text = "[Translation Error]"
-            if isinstance(translation_result, dict):
-                if "error" in translation_result:
-                    final_text = f"Error: {translation_result['error']}"
-                elif snip_tag_name in translation_result:
-                    final_text = translation_result[snip_tag_name]
-                elif len(translation_result) == 1: # Handle case where tag might be missing but only one result
-                    final_text = next(iter(translation_result.values()), "[Parsing Failed]")
+            if isinstance(translation_result, dict) and "error" in translation_result:
+                final_text = f"Error: {translation_result['error']}"
+            elif isinstance(translation_result, str):
+                final_text = translation_result # Expecting plain string now
+            # Remove the old dictionary parsing logic for snips
 
             print(f"[Snip Translate] Result: '{final_text}'")
             self.master.after_idle(lambda: self.update_status("Snip translation complete."))
@@ -819,16 +827,27 @@ class VisualNovelTranslatorApp:
                 initial_config=snip_config,
                 manager_ref=None # Snip window is independent of the manager
             )
+            # The window's __init__ calls _update_visibility, which for Closable...
+            # ensures it becomes visible. update_text below will handle resizing.
 
-            # --- Position the snip window intelligently ---
+            # --- Position the snip window intelligently (BEFORE resizing) ---
             # Default position: to the right of the snipped region
             pos_x = region["left"] + region["width"] + 10
             pos_y = region["top"]
+            # Apply initial position before potential resize
+            self.current_snip_window.geometry(f"+{pos_x}+{pos_y}")
+            self.current_snip_window.update_idletasks() # Calculate initial size/pos
 
-            # Ensure window is fully visible on screen
-            self.current_snip_window.update_idletasks() # Ensure dimensions are calculated
+            # --- Update text and trigger auto-resize ---
+            self.current_snip_window.update_text(text) # This now handles resizing
+
+            # --- Re-check screen bounds AFTER resizing ---
+            self.current_snip_window.update_idletasks() # Ensure final dimensions are calculated
             win_width = self.current_snip_window.winfo_width()
             win_height = self.current_snip_window.winfo_height()
+            # Get potentially updated position
+            pos_x = self.current_snip_window.winfo_x()
+            pos_y = self.current_snip_window.winfo_y()
             screen_width = self.master.winfo_screenwidth()
             screen_height = self.master.winfo_screenheight()
 
@@ -842,11 +861,9 @@ class VisualNovelTranslatorApp:
             pos_x = max(0, pos_x)
             pos_y = max(0, pos_y)
 
-            # Apply the calculated position
+            # Apply the final calculated position
             self.current_snip_window.geometry(f"+{pos_x}+{pos_y}")
 
-            # Update the text and ensure it's visible
-            self.current_snip_window.update_text(text) # Force show
 
         except Exception as e:
             print(f"Error creating snip result window: {e}")
@@ -1342,6 +1359,13 @@ class VisualNovelTranslatorApp:
 
     def show_floating_controls(self):
         """Shows or brings the floating controls window to the front."""
+        # Only show if capture is active
+        if not self.capturing:
+            # If trying to show via menu when not capturing, maybe give feedback?
+            # print("Cannot show floating controls: Capture not active.")
+            # Or just silently do nothing.
+            return
+
         try:
             if self.floating_controls is None or not self.floating_controls.winfo_exists():
                 self.floating_controls = FloatingControls(self.master, self)
@@ -1356,7 +1380,10 @@ class VisualNovelTranslatorApp:
     def hide_floating_controls(self):
         """Hides the floating controls window."""
         if self.floating_controls and self.floating_controls.winfo_exists():
-            self.floating_controls.withdraw()
+            try:
+                self.floating_controls.withdraw()
+            except tk.TclError:
+                pass # Ignore if already destroyed
 
     def on_close(self):
         """Handles the application closing sequence."""

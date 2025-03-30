@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import font as tkFont
 from tkinter import ttk
 from utils.settings import save_overlay_config_for_roi
+from ui.overlay_tab import SNIP_ROI_NAME # Import SNIP_ROI_NAME
 
 class FloatingOverlayWindow(tk.Toplevel):
     MIN_WIDTH = 50
@@ -34,7 +35,7 @@ class FloatingOverlayWindow(tk.Toplevel):
 
         # Content Frame (allows padding and easier layout)
         self.content_frame = tk.Frame(self, bg=self.config.get('bg_color', '#222222'))
-        self.content_frame.pack(fill=tk.BOTH, expand=True)
+        self.content_frame.pack(fill=tk.BOTH, expand=True, padx=1, pady=1) # Small padding for frame
 
         # Main Text Label
         self.label_var = tk.StringVar()
@@ -125,7 +126,7 @@ class FloatingOverlayWindow(tk.Toplevel):
     def _save_geometry(self):
         """Saves the current window size and position to the config."""
         # Do not save geometry for the temporary snip window
-        if self.roi_name == "_snip_translate":
+        if self.roi_name == SNIP_ROI_NAME: # Use imported constant
             return
 
         try:
@@ -239,12 +240,8 @@ class FloatingOverlayWindow(tk.Toplevel):
         is_globally_enabled = manager_exists and getattr(self.manager, 'global_overlays_enabled', True)
         is_individually_enabled = self.config.get('enabled', True)
 
-        # For the special Snip window, ignore capture state and global state
-        if self.roi_name == "_snip_translate":
-            should_be_visible = True # Snip window is always visible when it exists
-        else:
-            # Normal ROI: visible only if capture active AND globally enabled AND individually enabled
-            should_be_visible = is_capture_active and is_globally_enabled and is_individually_enabled
+        # Normal ROI: visible only if capture active AND globally enabled AND individually enabled
+        should_be_visible = is_capture_active and is_globally_enabled and is_individually_enabled
 
         # Get current visibility state
         try:
@@ -415,7 +412,13 @@ class FloatingOverlayWindow(tk.Toplevel):
 
 
 class ClosableFloatingOverlayWindow(FloatingOverlayWindow):
-    """A floating overlay window with a small close button."""
+    """A floating overlay window with a small close button and auto-resizing."""
+    # Define reasonable max width relative to screen, can be adjusted
+    MAX_WIDTH_FACTOR = 0.5 # Max 50% of screen width
+    # Padding values (adjust as needed to match visual appearance)
+    HORIZONTAL_PADDING = 15 # Approx label padx + frame padx + button width + button padx
+    VERTICAL_PADDING = 10   # Approx label pady + frame pady
+
     def __init__(self, master, roi_name, initial_config, manager_ref):
         super().__init__(master, roi_name, initial_config, manager_ref)
 
@@ -425,7 +428,7 @@ class ClosableFloatingOverlayWindow(FloatingOverlayWindow):
         style.configure("Close.TButton", padding=0, font=('Segoe UI', 7))
 
         # Create the close button
-        close_button = ttk.Button(
+        self.close_button = ttk.Button(
             self.content_frame, # Place button inside the content frame
             text="✕", # Close symbol (Unicode multiplication sign)
             command=self.destroy_window, # Command to close the window
@@ -433,10 +436,10 @@ class ClosableFloatingOverlayWindow(FloatingOverlayWindow):
             style="Close.TButton" # Apply the custom style
         )
         # Add a flag to identify this button during drag checks
-        close_button._is_close_button = True
+        self.close_button._is_close_button = True
 
         # Place the button in the top-right corner of the content frame grid
-        close_button.grid(row=0, column=1, sticky="ne", padx=(0, 1), pady=(1, 0))
+        self.close_button.grid(row=0, column=1, sticky="ne", padx=(0, 1), pady=(1, 0))
 
         # Ensure the button column doesn't expand (column 0 holds the label and expands)
         self.content_frame.grid_columnconfigure(1, weight=0)
@@ -446,11 +449,61 @@ class ClosableFloatingOverlayWindow(FloatingOverlayWindow):
         # print(f"Skipping geometry save for closable window: {self.roi_name}") # Debug
         pass # Do not save geometry for temporary/closable windows
 
-    # _update_visibility is inherited, but its behavior is modified for _snip_translate
-    # inside the method itself in the parent class.
+    def _update_visibility(self):
+        """Override visibility for closable windows - they are always visible when they exist."""
+        # This override ensures the snip window ignores manager/capture state
+        try:
+            if not self.winfo_exists():
+                return
+            # Ensure it's shown if it exists and not already visible
+            if self.state() != 'normal':
+                self.deiconify()
+                self.lift()
+        except tk.TclError:
+            pass # Ignore if destroyed mid-operation
 
     def update_text(self, text):
-        """Updates text and ensures visibility for closable window."""
+        """Updates text and auto-resizes the window to fit content."""
+        # 1. Update the text variable
         super().update_text(text)
-        # Ensure it remains visible after text update
+
+        # 2. Trigger UI updates to calculate required sizes
+        try:
+            if not self.winfo_exists(): return
+            self.update_idletasks()
+        except tk.TclError:
+            return # Window gone
+
+        # 3. Calculate required size
+        try:
+            req_h = self.label.winfo_reqheight()
+            req_w = self.label.winfo_reqwidth()
+            # Add padding and button width if it exists
+            close_btn_w = self.close_button.winfo_reqwidth() if hasattr(self, 'close_button') and self.close_button.winfo_exists() else 0
+
+            new_w = req_w + close_btn_w + self.HORIZONTAL_PADDING
+            new_h = req_h + self.VERTICAL_PADDING
+
+            # Enforce minimum size
+            final_w = max(self.MIN_WIDTH, new_w)
+            final_h = max(self.MIN_HEIGHT, new_h)
+
+            # Enforce maximum width
+            max_w = int(self.winfo_screenwidth() * self.MAX_WIDTH_FACTOR)
+            final_w = min(final_w, max_w)
+
+            # 4. Get current position
+            current_x = self.winfo_x()
+            current_y = self.winfo_y()
+
+            # 5. Apply new geometry
+            # print(f"Resizing Snip Window to: {final_w}x{final_h}") # Debug
+            self.geometry(f"{final_w}x{final_h}+{current_x}+{current_y}")
+
+        except tk.TclError:
+            print("Warning: TclError during snip window resize (widget destroyed?).")
+        except Exception as e:
+            print(f"Error auto-resizing snip window: {e}")
+
+        # 6. Ensure visibility (redundant due to override, but safe)
         self._update_visibility()

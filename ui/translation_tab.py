@@ -189,13 +189,6 @@ class TranslationTab(BaseTab):
         row_num += 1
 
         # System prompt REMOVED from UI
-        # ttk.Label(self.preset_settings_frame, text="System Prompt:", anchor=tk.NW).grid(row=row_num, column=0, sticky=tk.NW, padx=5, pady=5)
-        # self.system_prompt_text = tk.Text(self.preset_settings_frame, width=50, height=6, wrap=tk.WORD)
-        # self.system_prompt_text.grid(row=row_num, column=1, sticky=tk.NSEW, padx=5, pady=5)
-        # scroll_sys = ttk.Scrollbar(self.preset_settings_frame, command=self.system_prompt_text.yview)
-        # scroll_sys.grid(row=row_num, column=2, sticky=tk.NS, pady=5)
-        # self.system_prompt_text.config(yscrollcommand=scroll_sys.set)
-        # row_num += 1 # Increment row if prompt was present
 
         # Context Limit (Part of Preset)
         ttk.Label(self.preset_settings_frame, text="Context Limit (History):").grid(row=row_num, column=0, sticky=tk.W, padx=5, pady=5)
@@ -235,7 +228,6 @@ class TranslationTab(BaseTab):
 
         # Make columns expandable in preset settings frame
         self.preset_settings_frame.columnconfigure(1, weight=1)
-        # self.preset_settings_frame.rowconfigure(3, weight=1) # Row 3 was system prompt, remove if not needed
 
         # Load initial preset data
         self.on_preset_selected() # Load data for the initially selected preset
@@ -444,8 +436,7 @@ class TranslationTab(BaseTab):
             self.model_entry.delete(0, tk.END)
             self.model_entry.insert(0, preset.get("model", ""))
 
-            # self.system_prompt_text.delete("1.0", tk.END) # REMOVED
-            # self.system_prompt_text.insert("1.0", preset.get("system_prompt", "")) # REMOVED
+            # System prompt REMOVED from UI
 
             self.context_limit_entry.delete(0, tk.END)
             self.context_limit_entry.insert(0, str(preset.get("context_limit", 10)))
@@ -554,7 +545,7 @@ class TranslationTab(BaseTab):
                 self.translation_presets[preset_name] = original_data
                 messagebox.showerror("Error", "Failed to save presets after deletion. The preset was not deleted.", parent=self.app.master)
 
-    def _start_translation_thread(self, force_recache=False):
+    def _start_translation_thread(self, force_recache=False, user_comment=None): # Added user_comment
         """Internal helper to start the translation thread."""
         config = self.get_translation_config()
         if config is None:
@@ -587,10 +578,14 @@ class TranslationTab(BaseTab):
             if hasattr(self.app, 'overlay_manager'): self.app.overlay_manager.clear_all_overlays()
             return
 
-        # No longer need aggregated_input_text here
-        # aggregated_input_text = "\n".join([f"[{name}]: {text}" for name, text in texts_to_translate.items()])
+        status_msg = "Translating..."
+        if user_comment:
+            status_msg = "Translating with comment..."
+        if force_recache:
+            status_msg = "Forcing retranslation..."
+            if user_comment:
+                status_msg = "Forcing retranslation with comment..."
 
-        status_msg = "Translating..." if not force_recache else "Forcing retranslation..."
         self.app.update_status(status_msg)
         try:
             if self.translation_display.winfo_exists():
@@ -603,23 +598,24 @@ class TranslationTab(BaseTab):
         # Update overlays to show "..." while translating
         if hasattr(self.app, 'overlay_manager'):
             for roi_name in texts_to_translate:
-                # *** CORRECTED LINE BELOW ***
                 self.app.overlay_manager.update_overlay_text(roi_name, "...")
 
         # Keep a reference to the input dictionary for preview construction
         input_texts_for_preview = texts_to_translate.copy()
 
-        def translation_thread():
+        # Define the thread function locally to capture variables
+        def translation_thread_task():
             try:
-                # Pass the dictionary directly
+                # Pass the dictionary directly and the comment
                 translated_segments = translate_text(
                     stable_texts_dict=texts_to_translate, # Pass the filtered dictionary
                     hwnd=current_hwnd,
-                    preset=config, # Preset no longer contains system_prompt from UI
+                    preset=config,
                     target_language=config["target_language"],
                     additional_context=config["additional_context"],
                     context_limit=config.get("context_limit", 10),
-                    force_recache=force_recache
+                    force_recache=force_recache,
+                    user_comment=user_comment # Pass the comment here
                 )
                 if "error" in translated_segments:
                     error_msg = translated_segments["error"]
@@ -628,11 +624,9 @@ class TranslationTab(BaseTab):
                     if hasattr(self.app, 'overlay_manager'):
                         first_roi = next(iter(texts_to_translate), None)
                         if first_roi:
-                            # *** CORRECTED LINE BELOW ***
                             self.app.master.after_idle(lambda name=first_roi: self.app.overlay_manager.update_overlay_text(name, f"Error!"))
                         for r_name in texts_to_translate:
                             if r_name != first_roi:
-                                # *** CORRECTED LINE BELOW ***
                                 self.app.master.after_idle(lambda n=r_name: self.app.overlay_manager.update_overlay_text(n, ""))
                 else:
                     print("Translation successful.")
@@ -666,17 +660,20 @@ class TranslationTab(BaseTab):
                 self.app.master.after_idle(lambda: self.update_translation_display_error(error_msg))
                 if hasattr(self.app, 'overlay_manager'): self.app.master.after_idle(self.app.overlay_manager.clear_all_overlays)
 
-        threading.Thread(target=translation_thread, daemon=True).start()
+        threading.Thread(target=translation_thread_task, daemon=True).start()
 
     def perform_translation(self):
         """Translate the stable text using the current settings (uses cache)."""
-        self._start_translation_thread(force_recache=False)
+        self._start_translation_thread(force_recache=False, user_comment=None)
 
     def perform_force_translation(self):
         """Force re-translation of the stable text, skipping cache check but updating cache."""
-        self._start_translation_thread(force_recache=True)
+        self._start_translation_thread(force_recache=True, user_comment=None)
 
-    # MODIFIED update_translation_results to add logging
+    def perform_translation_with_comment(self, comment, force_recache=False):
+        """Translate the stable text, including a user comment (cache behavior depends on force_recache)."""
+        self._start_translation_thread(force_recache=force_recache, user_comment=comment)
+
     def update_translation_results(self, translated_segments, preview_text):
         """Update the preview display and overlays with translation results. Runs in main thread."""
         self.app.update_status("Translation complete.")
@@ -745,5 +742,3 @@ class TranslationTab(BaseTab):
             result = reset_context(current_hwnd) # Pass hwnd (even if None)
             messagebox.showinfo("Context Reset", result, parent=self.app.master)
             self.app.update_status("Translation context reset.")
-
-# --- END OF FILE ui/translation_tab.py ---

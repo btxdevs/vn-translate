@@ -19,12 +19,11 @@ context_messages = []
 
 # --- Logging Helper ---
 def format_message_for_log(message):
-    """Formats a message dictionary for concise logging."""
-    role = message.get('role', 'unknown')
-    content = message.get('content', '')
-    content_display = content.replace('\n', '\\n')
-    return f"[{role}] '{content_display}'"
-
+        """Formats a message dictionary for concise logging."""
+        role = message.get('role', 'unknown')
+        content = message.get('content', '')
+        content_display = content.replace('\n', '\\n')
+        return f"[{role}] '{content_display}'"
 # --- Directory and Hashing ---
 
 def _ensure_cache_dir():
@@ -173,7 +172,6 @@ def reset_context(hwnd):
     elif context_file_path: return "Context history reset (no file found to delete)."
     else: return "Context history reset (could not determine file path)."
 
-# MODIFIED add_context_message
 def add_context_message(message):
     """Add a message to the global translation context history. No trimming here."""
     global context_messages
@@ -204,7 +202,6 @@ def set_cache_translation(cache_key, translation, cache_file_path):
     cache[cache_key] = translation
     _save_cache(cache, cache_file_path)
 
-# MODIFIED parse_translation_output
 def parse_translation_output(response_text, original_tag_mapping):
     """
     Parse the translation output from a tagged format (<|n|>)
@@ -302,7 +299,6 @@ def parse_translation_output(response_text, original_tag_mapping):
     return parsed_segments
 
 
-# MODIFIED preprocess_text_for_translation
 def preprocess_text_for_translation(stable_texts_dict):
     """
     Convert input dictionary {roi_name: text} to the numbered format <|1|> text.
@@ -337,12 +333,13 @@ def preprocess_text_for_translation(stable_texts_dict):
     # Join the processed lines with newlines for the final string
     return '\n'.join(preprocessed_lines), tag_mapping
 
-# MODIFIED translate_text function signature and preprocessing call
-def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additional_context="", context_limit=10, force_recache=False, skip_cache=False, skip_history=False):
+# MODIFIED translate_text function signature and logic
+def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additional_context="", context_limit=10, force_recache=False, skip_cache=False, skip_history=False, user_comment=None): # Added user_comment
     """
     Translate the given text segments (from a dictionary) using an OpenAI-compatible API client,
     using game-specific caching and context. System prompt is constructed internally.
     Context history sent to the API is limited by context_limit.
+    A user_comment can be provided for transient guidance.
     """
     cache_file_path = None if skip_cache else _get_cache_file_path(hwnd)
     if not skip_cache and not cache_file_path and hwnd is not None:
@@ -356,7 +353,8 @@ def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additi
         print("No valid text segments found after preprocessing. Nothing to translate.")
         return {} # Return empty dict if nothing to translate
 
-    # Cache key is based on the preprocessed text (what the LLM sees) and target language
+    # Cache key is based ONLY on the preprocessed text and target language.
+    # User comments do NOT affect the cache key.
     cache_key = get_cache_key(preprocessed_text_for_llm, target_language)
 
     # --- Cache Check ---
@@ -423,16 +421,20 @@ def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additi
 
     # --- Construct User Message for API ---
     current_user_message_parts = []
-    if additional_context.strip():
+    # Add the persistent additional context FIRST
+    if additional_context and additional_context.strip():
         current_user_message_parts.append(f"Additional context for this translation: {additional_context.strip()}")
+    # Add the transient user comment SECOND if provided
+    if user_comment and user_comment.strip():
+        current_user_message_parts.append(f"User Comment for this translation: {user_comment.strip()}")
+    # Then add the instruction and the text itself
     current_user_message_parts.append(f"Translate the following segments into {target_language}, maintaining the exact <|n|> tags:")
-    # Use the preprocessed text string here
-    current_user_message_parts.append(preprocessed_text_for_llm)
+    current_user_message_parts.append(preprocessed_text_for_llm) # Use the preprocessed text string here
     current_user_content_with_context = "\n\n".join(current_user_message_parts)
     current_user_message_for_api = {"role": "user", "content": current_user_content_with_context}
     # --- End Construct User Message ---
 
-    # Prepare the user message that will be *added* to the full history (without additional context)
+    # Prepare the user message that will be *added* to the full history (without additional context OR user comment)
     history_user_message = None
     if not skip_history:
         history_user_message_parts = [
@@ -472,7 +474,7 @@ def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additi
         # Log the number of messages *actually sent*
         print(f"  - [CONTEXT HISTORY - {len(history_to_send)} messages sent]:")
         for msg in history_to_send: print(f"    - {format_message_for_log(msg)}")
-    print(f"  - {format_message_for_log(current_user_message_for_api)}")
+    print(f"  - {format_message_for_log(current_user_message_for_api)}") # This now includes user comment if present
     print("-" * 55)
 
     try:
@@ -499,7 +501,7 @@ def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additi
             error_body = json.loads(getattr(e, 'body', '{}') or '{}')
             detail = error_body.get('error', {}).get('message', '')
             if detail: error_message = detail
-        except: pass
+        except Exception: pass
         log_msg = f"[API] APIError during translation request: Status {status_code}, Error: {error_message}"
         print(log_msg)
         print(f"[API] Request Model: {payload.get('model')}")
@@ -519,7 +521,7 @@ def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additi
         print("[LLM PARSE] Parsing failed after receiving response.")
         return final_translations # Return the error dictionary
 
-    # --- Add to Stored History (using history_user_message) ---
+    # --- Add to Stored History (using history_user_message - WITHOUT user comment) ---
     # Use the raw response_text for the assistant message in history
     if not skip_history and history_user_message:
         add_to_history = True
@@ -541,6 +543,7 @@ def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additi
     # --- End Add to Stored History ---
 
     # --- Cache the successful result ---
+    # Cache key does NOT include the user comment
     if not skip_cache and cache_file_path:
         # Cache the parsed dictionary result, not the raw response
         set_cache_translation(cache_key, final_translations, cache_file_path)
@@ -550,5 +553,3 @@ def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additi
     # --- End Cache ---
 
     return final_translations
-
-# --- END OF FILE utils/translation.py ---

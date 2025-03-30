@@ -1,8 +1,59 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog # Keep simpledialog just in case? No, remove if not used.
 import pyperclip
 from utils.settings import get_setting, set_setting
 
+# --- Custom Dialog for Multiline Input ---
+class MultilineInputDialog(tk.Toplevel):
+    def __init__(self, parent, title=None, prompt=None):
+        super().__init__(parent)
+        self.transient(parent)
+        self.parent = parent
+        self.result = None # Store the result here
+
+        if title:
+            self.title(title)
+
+        if prompt:
+            ttk.Label(self, text=prompt, justify=tk.LEFT).pack(padx=10, pady=(10, 5), anchor=tk.W)
+
+        # Text widget for multiline input
+        self.text_widget = tk.Text(self, width=50, height=8, wrap=tk.WORD)
+        self.text_widget.pack(padx=10, pady=5, fill=tk.BOTH, expand=True)
+        # Add scrollbar
+        scrollbar = ttk.Scrollbar(self.text_widget, command=self.text_widget.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.text_widget.config(yscrollcommand=scrollbar.set)
+
+
+        # Buttons frame
+        button_frame = ttk.Frame(self)
+        button_frame.pack(padx=10, pady=(5, 10), fill=tk.X)
+
+        ok_button = ttk.Button(button_frame, text="OK", width=10, command=self.on_ok)
+        ok_button.pack(side=tk.RIGHT, padx=5)
+
+        cancel_button = ttk.Button(button_frame, text="Cancel", width=10, command=self.on_cancel)
+        cancel_button.pack(side=tk.RIGHT)
+
+        # Make dialog modal
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self.on_cancel)
+        self.geometry("+%d+%d" % (parent.winfo_rootx()+50, parent.winfo_rooty()+50))
+        self.text_widget.focus_set()
+
+        # Wait for the dialog to close
+        self.wait_window(self)
+
+    def on_ok(self, event=None):
+        self.result = self.text_widget.get("1.0", tk.END).strip()
+        self.destroy()
+
+    def on_cancel(self, event=None):
+        self.result = None # Indicate cancellation
+        self.destroy()
+
+# --- Floating Controls Window ---
 class FloatingControls(tk.Toplevel):
     """A small, draggable, topmost window for quick translation actions."""
     def __init__(self, master, app_ref):
@@ -23,29 +74,55 @@ class FloatingControls(tk.Toplevel):
         style.map("Toolbutton.TCheckbutton",
                   background=[('selected', '#CCCCCC'), ('!selected', '#E0E0E0')],
                   foreground=[('selected', 'black'), ('!selected', 'black')])
+
         button_frame = ttk.Frame(self, padding=5)
         button_frame.pack(fill=tk.BOTH, expand=True)
+
         col_index = 0
+
+        # Retranslate
         self.retranslate_btn = ttk.Button(button_frame, text="🔄", width=3, style="Floating.TButton",
                                           command=self.app.translation_tab.perform_translation)
         self.retranslate_btn.grid(row=0, column=col_index, padx=2, pady=2)
         self.add_tooltip(self.retranslate_btn, "Re-translate (use cache)")
         col_index += 1
+
+        # Force Retranslate
         self.force_retranslate_btn = ttk.Button(button_frame, text="⚡", width=3, style="Floating.TButton",
                                                 command=self.app.translation_tab.perform_force_translation)
         self.force_retranslate_btn.grid(row=0, column=col_index, padx=2, pady=2)
         self.add_tooltip(self.force_retranslate_btn, "Force re-translate & update cache")
         col_index += 1
+
+        # Translate with Comment (NEW)
+        self.translate_comment_btn = ttk.Button(button_frame, text="💬🔄", width=4, style="Floating.TButton",
+                                                command=self.translate_with_comment)
+        self.translate_comment_btn.grid(row=0, column=col_index, padx=2, pady=2)
+        self.add_tooltip(self.translate_comment_btn, "Translate with Comment (use cache)")
+        col_index += 1
+
+        # Force Retranslate with Comment (NEW)
+        self.force_translate_comment_btn = ttk.Button(button_frame, text="💬⚡", width=4, style="Floating.TButton",
+                                                      command=self.force_translate_with_comment)
+        self.force_translate_comment_btn.grid(row=0, column=col_index, padx=2, pady=2)
+        self.add_tooltip(self.force_translate_comment_btn, "Force re-translate with Comment & update cache")
+        col_index += 1
+
+        # Copy
         self.copy_btn = ttk.Button(button_frame, text="📋", width=3, style="Floating.TButton",
                                    command=self.copy_last_translation)
         self.copy_btn.grid(row=0, column=col_index, padx=2, pady=2)
         self.add_tooltip(self.copy_btn, "Copy last translation(s)")
         col_index += 1
+
+        # Snip
         self.snip_btn = ttk.Button(button_frame, text="✂️", width=3, style="Floating.TButton",
                                    command=self.start_snip_mode)
         self.snip_btn.grid(row=0, column=col_index, padx=2, pady=2)
         self.add_tooltip(self.snip_btn, "Snip & Translate Region")
         col_index += 1
+
+        # Auto-Translate Toggle
         initial_auto_state = False
         if hasattr(self.app, 'translation_tab') and self.app.translation_tab:
             initial_auto_state = self.app.translation_tab.is_auto_translate_enabled()
@@ -56,6 +133,8 @@ class FloatingControls(tk.Toplevel):
         self.auto_btn.grid(row=0, column=col_index, padx=2, pady=2)
         self.add_tooltip(self.auto_btn, "Toggle Auto-Translate")
         col_index += 1
+
+        # Overlay Toggle
         initial_overlay_state = True
         if hasattr(self.app, 'overlay_manager') and self.app.overlay_manager:
             initial_overlay_state = self.app.overlay_manager.global_overlays_enabled
@@ -66,10 +145,14 @@ class FloatingControls(tk.Toplevel):
         self.overlay_btn.grid(row=0, column=col_index, padx=2, pady=2)
         self.add_tooltip(self.overlay_btn, "Show/Hide Overlays")
         col_index += 1
+
+        # Close Button
         self.close_btn = ttk.Button(button_frame, text="✕", width=2, style="Floating.TButton",
                                     command=self.withdraw)
         self.close_btn.grid(row=0, column=col_index, padx=(5, 2), pady=2)
         self.add_tooltip(self.close_btn, "Hide Controls")
+
+        # Positioning
         saved_pos = get_setting("floating_controls_pos")
         if saved_pos:
             try:
@@ -89,6 +172,7 @@ class FloatingControls(tk.Toplevel):
                 self.center_window()
         else:
             self.center_window()
+
         self.master.after_idle(self.update_button_states)
         self.deiconify()
 
@@ -160,6 +244,40 @@ class FloatingControls(tk.Toplevel):
             print("Error: Snip mode function not found in main app.")
             messagebox.showerror("Error", "Snip & Translate feature not available.", parent=self)
 
+    def _get_multiline_comment(self, title, prompt):
+        """Opens a custom dialog for multiline comment input."""
+        dialog = MultilineInputDialog(self, title=title, prompt=prompt)
+        # The dialog's result is stored in dialog.result after it closes
+        return dialog.result
+
+    def translate_with_comment(self):
+        """Prompts for a multiline comment and starts translation (using cache)."""
+        comment = self._get_multiline_comment("Translate with Comment", "Enter a comment to guide the translation:")
+        if comment is None: # User cancelled
+            self.app.update_status("Translation with comment cancelled.")
+            return
+        # comment is already stripped by the dialog
+
+        if hasattr(self.app, 'translation_tab') and hasattr(self.app.translation_tab, 'perform_translation_with_comment'):
+            self.app.translation_tab.perform_translation_with_comment(comment, force_recache=False)
+        else:
+            print("Error: Translation tab or comment function not found.")
+            messagebox.showerror("Error", "Translate with comment feature not available.", parent=self)
+
+    def force_translate_with_comment(self):
+        """Prompts for a multiline comment and starts force re-translation."""
+        comment = self._get_multiline_comment("Force Translate with Comment", "Enter a comment to guide the translation:")
+        if comment is None: # User cancelled
+            self.app.update_status("Force translation with comment cancelled.")
+            return
+        # comment is already stripped by the dialog
+
+        if hasattr(self.app, 'translation_tab') and hasattr(self.app.translation_tab, 'perform_translation_with_comment'):
+            self.app.translation_tab.perform_translation_with_comment(comment, force_recache=True)
+        else:
+            print("Error: Translation tab or comment function not found.")
+            messagebox.showerror("Error", "Force translate with comment feature not available.", parent=self)
+
     def toggle_auto_translate(self):
         if not hasattr(self.app, 'translation_tab') or not self.app.translation_tab:
             print("Error: Translation tab not found.")
@@ -174,7 +292,7 @@ class FloatingControls(tk.Toplevel):
             print(f"Error invoking main auto-translate toggle: {e}")
             try:
                 self.auto_var.set(not is_enabled_now)
-            except:
+            except Exception:
                 pass
 
     def toggle_overlays(self):
@@ -190,7 +308,7 @@ class FloatingControls(tk.Toplevel):
             print(f"Error invoking overlay manager toggle: {e}")
             try:
                 self.overlay_var.set(not new_state)
-            except:
+            except Exception:
                 pass
 
     def update_button_states(self):
@@ -235,14 +353,14 @@ class Tooltip:
         if enter_id:
             try:
                 self.widget.after_cancel(enter_id)
-            except:
+            except Exception:
                 pass
         leave_id = self.leave_id
         self.leave_id = None
         if leave_id:
             try:
                 self.widget.after_cancel(leave_id)
-            except:
+            except Exception:
                 pass
 
     def showtip(self):

@@ -380,6 +380,7 @@ def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additi
     A user_comment can be provided for transient guidance.
     Injects few-shot examples if context is short.
     Includes prompt modifications to reduce refusals for fictional content.
+    Removes previous exchange from history sent to API if force_recache=True and input matches last input.
     """
     cache_file_path = None if skip_cache else _get_cache_file_path(hwnd)
     if not skip_cache and not cache_file_path and hwnd is not None and not is_snip: # Cache only for non-snip, non-skipped game translations
@@ -455,10 +456,33 @@ def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additi
     system_message = {"role": "system", "content": system_prompt_content}
     # --- End System Prompt Construction ---
 
-    # --- Prepare Context History for API Call (Apply Limit, skip for snip) ---
+    # --- Prepare History for API Call & Persistent History ---
     history_to_send = []
+    history_user_message = None # This is the message *without* context/comment/examples
+    input_matches_last = False
+
     if not skip_history: # skip_history is True for snips
-        global context_messages
+        # Prepare the user message that will be *added* to the full history
+        history_user_message_parts = [
+            f"Translate the following segments into {target_language}, maintaining the exact <|n|> tags:",
+            text_to_translate # Use the same preprocessed text for history
+        ]
+        history_user_content = "\n\n".join(history_user_message_parts)
+        history_user_message = {"role": "user", "content": history_user_content}
+
+        # Check if current input matches the last user input in persistent history
+        if len(context_messages) >= 2:
+            last_user_msg_stored = context_messages[-2]
+            if last_user_msg_stored.get('role') == 'user' and last_user_msg_stored.get('content') == history_user_message.get('content'):
+                input_matches_last = True
+
+        # Determine the actual history to send to the API
+        effective_history_base = list(context_messages) # Start with full persistent history
+        if force_recache and input_matches_last:
+            print("[CONTEXT] Force retranslate of last input: Excluding previous user/assistant pair from API call history.")
+            effective_history_base = context_messages[:-2] # Exclude the last pair
+
+        # Apply context limit
         try:
             limit_exchanges = int(context_limit)
             limit_exchanges = max(1, limit_exchanges)
@@ -467,19 +491,19 @@ def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additi
             print(f"[CONTEXT] Warning: Invalid context_limit value '{context_limit}'. Using default: {limit_exchanges}")
 
         max_messages_to_send = limit_exchanges * 2
-        if len(context_messages) > max_messages_to_send:
-            history_to_send = context_messages[-max_messages_to_send:]
+        if len(effective_history_base) > max_messages_to_send:
+            start_index = len(effective_history_base) - max_messages_to_send
+            history_to_send = effective_history_base[start_index:]
             print(f"[CONTEXT] Sending last {len(history_to_send)} messages ({limit_exchanges} exchanges limit) to API.")
         else:
-            history_to_send = list(context_messages)
+            history_to_send = effective_history_base # Send the potentially reduced history
             print(f"[CONTEXT] Sending all {len(history_to_send)} available messages (within {limit_exchanges} exchanges limit) to API.")
-    # --- End Context History Preparation ---
+    # --- End History Preparation ---
 
     # --- Inject Few-Shot Examples if Context is Short ---
     example_block = ""
     # Use len(history_to_send) as the effective history length for this call
-    # Inject examples if less than 5 actual exchanges are being sent (10 messages)
-    if len(history_to_send) < 10:
+    if len(history_to_send) < 10: # Less than 5 exchanges (10 messages)
         print("[PROMPT] Injecting few-shot examples due to short context history.")
         examples_to_use = []
         # Basic language check for examples (assuming Japanese input for now)
@@ -525,17 +549,6 @@ def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additi
     current_user_content_with_context = "\n\n".join(current_user_message_parts)
     current_user_message_for_api = {"role": "user", "content": current_user_content_with_context}
     # --- End Construct User Message ---
-
-    # Prepare the user message that will be *added* to the full history (only for non-snip)
-    history_user_message = None
-    if not skip_history: # skip_history is True for snips
-        # History message does NOT include context, comment, or examples
-        history_user_message_parts = [
-            f"Translate the following segments into {target_language}, maintaining the exact <|n|> tags:",
-            text_to_translate # Use the same preprocessed text for history
-        ]
-        history_user_content = "\n\n".join(history_user_message_parts)
-        history_user_message = {"role": "user", "content": history_user_content}
 
     # Construct the final list of messages for the API call
     messages_for_api = [system_message] + history_to_send + [current_user_message_for_api]
@@ -625,41 +638,35 @@ def translate_text(stable_texts_dict, hwnd, preset, target_language="en", additi
             print("[LLM PARSE] Parsing failed after receiving response.")
             return final_result # Return the error dictionary
 
-        # --- Add/Update History (only for successful non-snip) ---
+        # --- Add/Update Persistent History (only for successful non-snip) ---
         if not skip_history and history_user_message:
-            add_to_history = True
-            history_updated = False # Flag to track if we replaced the last entry
+            history_updated = False # Flag to track if we modified persistent history
 
-            # Check if the exact same user input was the last user input in the *full stored* history
-            if len(context_messages) >= 2:
-                last_user_message_in_stored_history = context_messages[-2]
-                # Ensure the last two messages are indeed user and assistant
-                if last_user_message_in_stored_history.get('role') == 'user' and context_messages[-1].get('role') == 'assistant':
-                    if last_user_message_in_stored_history.get('content') == history_user_message.get('content'):
-                        # Input matches the previous user message
-                        if force_recache:
-                            # Force retranslate: Update the last assistant message instead of skipping
-                            context_messages[-1]['content'] = response_text # Update content of the last message
-                            history_updated = True
-                            add_to_history = False # Don't append new messages
-                            print("[CONTEXT] Input identical, but force_recache=True. Updating last assistant message in history.")
-                        else:
-                            # Normal translate: Skip adding duplicate history
-                            add_to_history = False
-                            print("[CONTEXT] Input identical to previous user message in stored history. Skipping history update.")
-
-            # Append new user/assistant pair if it's not a duplicate (or if history was too short for check)
-            if add_to_history:
+            if input_matches_last:
+                # Input matches the previous user message
+                if force_recache:
+                    # Force retranslate: Update the last assistant message
+                    if context_messages and context_messages[-1].get('role') == 'assistant':
+                        context_messages[-1]['content'] = response_text # Update content of the last message
+                        history_updated = True
+                        print("[CONTEXT] Input identical, force_recache=True. Updating last assistant message in persistent history.")
+                    else:
+                        print("[CONTEXT] Warning: Expected last message to be assistant but wasn't. Cannot update.")
+                else:
+                    # Normal translate: Skip adding duplicate history
+                    print("[CONTEXT] Input identical to previous user message in stored history. Skipping persistent history update.")
+            else:
+                # Input is new: Append new user/assistant pair
                 current_assistant_message = {"role": "assistant", "content": response_text} # Save raw response
                 add_context_message(history_user_message)
                 add_context_message(current_assistant_message)
-                history_updated = True # Mark as updated because we added
-                print("[CONTEXT] New user/assistant pair added to history.")
+                history_updated = True
+                print("[CONTEXT] New user/assistant pair added to persistent history.")
 
-            # Save context if any changes were made (append or update)
+            # Save persistent context if any changes were made (append or update)
             if history_updated:
                 _save_context(hwnd)
-        # --- End Add/Update History ---
+        # --- End Add/Update Persistent History ---
 
         # --- Cache the successful result (only for non-snip) ---
         if not skip_cache and cache_file_path and cache_key:

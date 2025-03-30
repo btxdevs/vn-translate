@@ -33,8 +33,6 @@ from ui.color_picker import ScreenColorPicker # Import screen color picker
 
 FPS = 10 # Target frames per second for capture loop
 FRAME_DELAY = 1.0 / FPS
-# OCR_ENGINE_LOCK = threading.Lock() # Removed - locking handled within ocr module if needed
-
 
 class VisualNovelTranslatorApp:
     def __init__(self, master):
@@ -92,7 +90,7 @@ class VisualNovelTranslatorApp:
 
         # Setup UI components
         self._setup_ui()
-        self.overlay_manager = OverlayManager(self.master, self)
+        self.overlay_manager = OverlayManager(self.master, self) # Initialize OverlayManager
         self.floating_controls = None
 
         # Initialize OCR engine (now happens in background)
@@ -220,7 +218,8 @@ class VisualNovelTranslatorApp:
                 self.rois = []
                 self.config_file = None
                 if hasattr(self, "roi_tab"): self.roi_tab.update_roi_list()
-                if hasattr(self, "overlay_manager"): self.overlay_manager.rebuild_overlays()
+                # Destroy existing overlays managed by the manager
+                if hasattr(self, "overlay_manager"): self.overlay_manager.destroy_all_overlays()
                 self.master.title("Visual Novel Translator") # Reset title
                 self.update_status("No window selected. ROIs cleared.")
                 self._clear_text_data() # Clear text history, stable text, etc.
@@ -256,7 +255,9 @@ class VisualNovelTranslatorApp:
 
             # Update UI elements related to ROIs
             if hasattr(self, "roi_tab"): self.roi_tab.update_roi_list()
-            if hasattr(self, "overlay_manager"): self.overlay_manager.rebuild_overlays()
+            # Rebuild overlay *data structures* but don't show windows yet
+            if hasattr(self, "overlay_manager"):
+                self.overlay_manager.rebuild_overlays() # Rebuilds internal state, visibility controlled by capture state
             self._clear_text_data() # Clear previous text data
 
         except Exception as e:
@@ -268,7 +269,7 @@ class VisualNovelTranslatorApp:
             self.rois = []
             self.config_file = None
             if hasattr(self, "roi_tab"): self.roi_tab.update_roi_list()
-            if hasattr(self, "overlay_manager"): self.overlay_manager.rebuild_overlays()
+            if hasattr(self, "overlay_manager"): self.overlay_manager.destroy_all_overlays() # Destroy on error
             self.master.title("Visual Novel Translator")
             self._clear_text_data()
             self.load_game_context(None)
@@ -300,8 +301,8 @@ class VisualNovelTranslatorApp:
                 self.translation_tab.translation_display.config(state=tk.DISABLED)
             except tk.TclError: pass
 
-        # Clear any text currently shown in overlays
-        if hasattr(self, "overlay_manager"):
+        # Clear any text currently shown in overlays (if capture isn't running)
+        if hasattr(self, "overlay_manager") and not self.capturing:
             self.overlay_manager.clear_all_overlays()
 
     def _trigger_ocr_initialization(self, engine_type, lang_code, initial_load=False):
@@ -394,6 +395,7 @@ class VisualNovelTranslatorApp:
 
         # Ensure ROIs are loaded for the selected game
         if not self.rois and self.selected_hwnd:
+            # This call now just loads data, doesn't show overlays
             self.load_rois_for_hwnd(self.selected_hwnd)
 
         # Check if OCR engine is ready
@@ -401,8 +403,6 @@ class VisualNovelTranslatorApp:
             # If not ready, trigger initialization again and inform user
             self._trigger_ocr_initialization(self.ocr_engine_type, self.ocr_lang)
             messagebox.showinfo("OCR Not Ready", f"OCR ({self.ocr_engine_type}/{self.ocr_lang}) is initializing... Capture will start, but text extraction may be delayed.", parent=self.master)
-        # else:
-        # print(f"OCR engine ({self.ocr_engine_type}/{self.ocr_lang}) is ready.")
 
         # If currently viewing a snapshot, return to live view first
         if self.using_snapshot: self.return_to_live()
@@ -417,8 +417,9 @@ class VisualNovelTranslatorApp:
         title = get_window_title(self.selected_hwnd) or f"HWND {self.selected_hwnd}"
         self.update_status(f"Capturing: {title}")
 
-        # Ensure overlays are ready/rebuilt for the current ROIs
-        if hasattr(self, "overlay_manager"): self.overlay_manager.rebuild_overlays()
+        # Notify OverlayManager that capture has started, which will show overlays
+        if hasattr(self, "overlay_manager"):
+            self.overlay_manager.notify_capture_started()
 
     def stop_capture(self):
         """Stops the capture loop."""
@@ -453,9 +454,9 @@ class VisualNovelTranslatorApp:
             # Update Capture tab buttons
             if hasattr(self, "capture_tab") and self.capture_tab.frame.winfo_exists():
                 self.capture_tab.on_capture_stopped()
-            # Hide overlays
+            # Notify OverlayManager to hide overlays
             if hasattr(self, "overlay_manager"):
-                self.overlay_manager.hide_all_overlays()
+                self.overlay_manager.notify_capture_stopped()
             self.update_status("Capture stopped.")
         finally:
             # Reset the finalization flag
@@ -773,6 +774,7 @@ class VisualNovelTranslatorApp:
                 context_limit=0, # No context history for snips
                 skip_cache=True, # Don't cache snips
                 skip_history=True, # Don't add snips to history
+                user_comment=None # No user comment for snip
             )
 
             # 4. Process translation result
@@ -894,10 +896,6 @@ class VisualNovelTranslatorApp:
                 # Process ROIs if OCR is ready and ROIs exist
                 if self.rois and self.ocr_engine_ready:
                     self._process_rois(frame) # Pass only frame, engine details are instance vars
-                # elif not self.ocr_engine_ready:
-                # Optional: Log that OCR is still initializing if needed
-                # print("[Capture Loop] Waiting for OCR engine...")
-                # pass
 
                 # --- Frame Display Timing ---
                 # Update display roughly at the target FPS
@@ -1012,7 +1010,7 @@ class VisualNovelTranslatorApp:
             try:
                 cw, ch = self.canvas.winfo_width(), self.canvas.winfo_height()
                 self.canvas.create_text(cw/2, ch/2, text=f"Display Error:\n{e}", fill="red", tags="display_content")
-            except: pass # Ignore errors during error display
+            except Exception: pass # Ignore errors during error display
 
     def _process_rois(self, frame):
         """Extracts text from ROIs, checks stability, and triggers translation."""
@@ -1332,7 +1330,8 @@ class VisualNovelTranslatorApp:
             self.roi_tab.roi_name_entry.delete(0, tk.END)
             self.roi_tab.roi_name_entry.insert(0, next_name)
 
-        # Create or update the corresponding overlay window
+        # Create or update the corresponding overlay window in the manager
+        # The manager will handle visibility based on capture state
         if hasattr(self, "overlay_manager"):
             self.overlay_manager.create_overlay_for_roi(new_roi)
 
@@ -1432,5 +1431,3 @@ class VisualNovelTranslatorApp:
             self.master.destroy()
         except tk.TclError: pass # Ignore errors if widgets already gone
         except Exception as e: print(f"Error during final window destruction: {e}")
-
-# --- END OF FILE app.py ---

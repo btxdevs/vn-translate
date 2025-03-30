@@ -76,7 +76,7 @@ class TranslationTab(BaseTab):
 
     def setup_ui(self):
         # --- Load relevant settings ---
-        self.target_language = get_setting("target_language", "en")
+        self.target_language = get_setting("target_language", "English")
         self.auto_translate_enabled = get_setting("auto_translate", False)
         last_preset_name = get_setting("last_preset_name")
 

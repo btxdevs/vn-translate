@@ -8,6 +8,7 @@ class OverlayManager:
         self.app = app_ref
         self.overlays = {} # Dictionary mapping roi_name to FloatingOverlayWindow instance
         self.global_overlays_enabled = get_setting("global_overlays_enabled", True)
+        self.capture_active = False # NEW: Track capture state
 
     def _get_roi_config(self, roi_name):
         """Gets the full, merged configuration for a specific ROI."""
@@ -16,13 +17,11 @@ class OverlayManager:
     def create_overlay_for_roi(self, roi):
         """Creates or replaces an overlay window for a given ROI object."""
         roi_name = roi.name
+        # If it exists, update its config instead of destroying/recreating
         if roi_name in self.overlays:
-            # If it exists, update its config instead of destroying/recreating
-            # unless a full rebuild is needed for some reason.
-            # For now, let's just update config and visibility.
             config = self._get_roi_config(roi_name)
             self.overlays[roi_name].update_config(config)
-            self.overlays[roi_name]._update_visibility() # Ensure visibility is correct
+            # Visibility is handled by _update_visibility called within update_config
             # print(f"Overlay for {roi_name} already exists, updated config.")
             return
 
@@ -32,6 +31,7 @@ class OverlayManager:
             overlay = FloatingOverlayWindow(self.master, roi_name, config, manager_ref=self)
             self.overlays[roi_name] = overlay
             # Initial visibility is handled within FloatingOverlayWindow.__init__
+            # which now checks self.capture_active (which is initially False)
             # print(f"Created overlay for {roi_name}")
         except Exception as e:
             print(f"Error creating floating overlay window for {roi_name}: {e}")
@@ -40,7 +40,6 @@ class OverlayManager:
         """Updates the text content of a specific overlay window."""
         if roi_name in self.overlays:
             overlay = self.overlays[roi_name]
-            # The overlay's update_text method now only handles the text variable
             overlay.update_text(text)
         # else:
         # print(f"Debug: Tried to update text for non-existent overlay {roi_name}")
@@ -49,7 +48,7 @@ class OverlayManager:
         """
         Updates text content of existing overlays based on translated_segments.
         Creates/Destroys overlays if ROIs are added/removed or enabled/disabled.
-        Ensures visibility is correct based on current global/individual states.
+        Ensures visibility is correct based on current capture and enabled states.
         """
         if not hasattr(self.app, 'rois'):
             print("Warning: update_overlays called but app.rois not available.")
@@ -66,29 +65,25 @@ class OverlayManager:
             is_roi_enabled_individually = config.get("enabled", True)
             text_to_display = translated_segments.get(roi_name, "")
 
+            # Check if overlay should exist (based on individual config)
             if is_roi_enabled_individually:
-                # If enabled, ensure overlay exists and update its text
+                # If enabled, ensure overlay exists
                 if roi_name not in self.overlays:
-                    # print(f"update_overlays: Creating overlay for enabled ROI {roi_name}")
-                    self.create_overlay_for_roi(roi) # Creates and sets initial visibility
+                    self.create_overlay_for_roi(roi) # Creates but doesn't force show
 
-                # Update text if overlay exists (or was just created)
+                # Update text and visibility if overlay exists
                 if roi_name in self.overlays:
                     self.update_overlay_text(roi_name, text_to_display)
-                    # Ensure visibility is correct (in case global state changed)
+                    # Ensure visibility is correct based on capture state etc.
                     self.overlays[roi_name]._update_visibility()
-
             else:
                 # If not enabled individually, ensure overlay is destroyed if it exists
                 if roi_name in self.overlays:
-                    # print(f"update_overlays: Destroying overlay for disabled ROI {roi_name}")
                     self.destroy_overlay(roi_name)
 
         # Destroy overlays for ROIs that no longer exist in the app's list
-        # (e.g., deleted in the ROI tab)
         names_to_remove = set(self.overlays.keys()) - processed_roi_names
         for roi_name in names_to_remove:
-            # print(f"update_overlays: Destroying overlay for removed ROI {roi_name}")
             self.destroy_overlay(roi_name)
 
     def clear_all_overlays(self):
@@ -97,21 +92,20 @@ class OverlayManager:
             overlay.update_text("") # Set text to empty
 
     def hide_all_overlays(self):
-        """Hides all managed overlay windows by updating their visibility state."""
+        """Hides all managed overlay windows by withdrawing them."""
         # print("OverlayManager: Hiding all overlays")
         for overlay in self.overlays.values():
             if overlay.winfo_exists():
-                overlay.withdraw() # Use withdraw for immediate hiding
+                try:
+                    overlay.withdraw() # Use withdraw for immediate hiding
+                except tk.TclError:
+                    pass # Ignore if window destroyed during iteration
 
     def show_all_overlays(self):
-        """Shows all managed overlay windows based on their individual enabled state."""
-        # print("OverlayManager: Showing all overlays (if enabled)")
-        if not self.global_overlays_enabled:
-            # print("OverlayManager: Global overlays disabled, not showing.")
-            return
+        """Shows all managed overlay windows based on their config and capture state."""
+        # print("OverlayManager: Updating visibility for all overlays")
         for overlay in self.overlays.values():
-            # Let the overlay decide if it should be visible based on its own config
-            overlay._update_visibility()
+            overlay._update_visibility() # Let the window decide based on all states
 
     def destroy_overlay(self, roi_name):
         """Safely destroys a specific overlay window and removes it from management."""
@@ -138,29 +132,28 @@ class OverlayManager:
             print("Warning: rebuild_overlays called but app.rois not available.")
             return
         for roi in self.app.rois:
-            self.create_overlay_for_roi(roi) # Creates if enabled, handles visibility internally
+            # create_overlay_for_roi handles creation.
+            # Visibility will be handled when capture starts.
+            self.create_overlay_for_roi(roi)
 
     def update_overlay_config(self, roi_name, new_partial_config):
         """Saves a partial config update and applies it to the live overlay if it exists."""
-        # Save the partial update first (merges with existing config)
         if save_overlay_config_for_roi(roi_name, new_partial_config):
             # print(f"OverlayManager: Saved config update for {roi_name}")
-            # Get the full, updated config after saving
             live_config = self._get_roi_config(roi_name)
 
             if roi_name in self.overlays:
-                # If overlay exists, update its config and visibility
                 # print(f"OverlayManager: Applying live config update to {roi_name}")
                 self.overlays[roi_name].update_config(live_config)
                 # update_config calls _update_visibility internally if needed
             else:
                 # If overlay doesn't exist, check if it *should* exist now
                 is_enabled_now = live_config.get('enabled', True)
-                if is_enabled_now and self.global_overlays_enabled:
-                    # Find the ROI object and create the overlay
+                # Only create if capture is also active
+                if is_enabled_now and self.global_overlays_enabled and self.capture_active:
                     roi = next((r for r in self.app.rois if r.name == roi_name), None)
                     if roi:
-                        # print(f"OverlayManager: Creating overlay for {roi_name} after config update (enabled).")
+                        # print(f"OverlayManager: Creating overlay for {roi_name} after config update (enabled & capture active).")
                         self.create_overlay_for_roi(roi)
         else:
             print(f"Error: Failed to save overlay settings for {roi_name}.")
@@ -174,9 +167,13 @@ class OverlayManager:
         self.global_overlays_enabled = enabled
 
         if set_setting("global_overlays_enabled", enabled):
-            # Update the visibility of all existing overlays
-            for overlay in self.overlays.values():
-                overlay._update_visibility()
+            # Update the visibility of all existing overlays based on the new global state
+            # (only if capture is active)
+            if self.capture_active:
+                self.show_all_overlays()
+            else:
+                # If capture isn't active, ensure they remain hidden
+                self.hide_all_overlays()
 
             # Update UI elements in other tabs (thread-safe checks)
             try:
@@ -201,8 +198,10 @@ class OverlayManager:
             # Revert state if saving failed
             self.global_overlays_enabled = not enabled
             # Attempt to revert visibility
-            for overlay in self.overlays.values():
-                overlay._update_visibility()
+            if self.capture_active:
+                self.show_all_overlays()
+            else:
+                self.hide_all_overlays()
 
 
     def save_specific_overlay_config(self, roi_name, config_dict):
@@ -228,3 +227,16 @@ class OverlayManager:
         else:
             print(f"Error saving geometry reset for {roi_name}.")
             return False
+
+    # --- NEW Methods for Capture State ---
+    def notify_capture_started(self):
+        """Called by the App when capture starts."""
+        print("OverlayManager: Capture Started - showing overlays.")
+        self.capture_active = True
+        self.show_all_overlays() # Update visibility based on current states
+
+    def notify_capture_stopped(self):
+        """Called by the App when capture stops."""
+        print("OverlayManager: Capture Stopped - hiding overlays.")
+        self.capture_active = False
+        self.hide_all_overlays() # Force hide all windows

@@ -82,7 +82,8 @@ class FloatingOverlayWindow(tk.Toplevel):
 
         # Load initial size/position
         self._load_geometry()
-        # Set initial visibility based on config and global state
+        # Set initial visibility based on config and manager state
+        # Since manager.capture_active is False initially, this will hide the window
         self._update_visibility()
 
     def _apply_alpha(self):
@@ -225,23 +226,25 @@ class FloatingOverlayWindow(tk.Toplevel):
                 return # Window is gone
 
     def _update_visibility(self):
-        """Shows or hides the window based on global and individual enabled states."""
+        """Shows or hides the window based on capture state, global and individual enabled states."""
         try:
             if not self.winfo_exists():
                 return
         except tk.TclError:
             return # Window is gone
 
-        # Determine if the window *should* be visible based on enabled states
-        manager_global_state = True # Default if no manager
-        if self.manager and hasattr(self.manager, 'global_overlays_enabled'):
-            manager_global_state = self.manager.global_overlays_enabled
-        # Snip window is always considered globally enabled when it exists
-        elif self.roi_name == "_snip_translate":
-            manager_global_state = True
-
+        # Determine if the window *should* be visible
+        manager_exists = self.manager is not None
+        is_capture_active = manager_exists and getattr(self.manager, 'capture_active', False)
+        is_globally_enabled = manager_exists and getattr(self.manager, 'global_overlays_enabled', True)
         is_individually_enabled = self.config.get('enabled', True)
-        should_be_visible = manager_global_state and is_individually_enabled
+
+        # For the special Snip window, ignore capture state and global state
+        if self.roi_name == "_snip_translate":
+            should_be_visible = True # Snip window is always visible when it exists
+        else:
+            # Normal ROI: visible only if capture active AND globally enabled AND individually enabled
+            should_be_visible = is_capture_active and is_globally_enabled and is_individually_enabled
 
         # Get current visibility state
         try:
@@ -305,8 +308,8 @@ class FloatingOverlayWindow(tk.Toplevel):
                 self._load_geometry() # Fallback to load/default
 
         # Update visibility if the 'enabled' state changed or geometry was reset
-        if enabled_state_changed or needs_geom_reload:
-            self._update_visibility()
+        # Let _update_visibility handle the logic based on capture state etc.
+        self._update_visibility()
 
     # --- Dragging Methods ---
     def on_press(self, event):
@@ -443,22 +446,11 @@ class ClosableFloatingOverlayWindow(FloatingOverlayWindow):
         # print(f"Skipping geometry save for closable window: {self.roi_name}") # Debug
         pass # Do not save geometry for temporary/closable windows
 
-    def _update_visibility(self):
-        """Override visibility for closable windows - they are always visible when they exist."""
-        try:
-            if not self.winfo_exists():
-                return
-            # Ensure it's shown if it exists
-            if self.state() != 'normal':
-                self.deiconify()
-                self.lift()
-        except tk.TclError:
-            pass # Ignore if destroyed mid-operation
+    # _update_visibility is inherited, but its behavior is modified for _snip_translate
+    # inside the method itself in the parent class.
 
     def update_text(self, text):
         """Updates text and ensures visibility for closable window."""
         super().update_text(text)
         # Ensure it remains visible after text update
         self._update_visibility()
-
-# --- END OF FILE ui/floating_overlay_window.py ---

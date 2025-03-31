@@ -1,4 +1,3 @@
-# --- START OF FILE ui/roi_tab.py ---
 
 import tkinter as tk
 from tkinter import ttk, messagebox, colorchooser
@@ -41,7 +40,7 @@ class ROITab(BaseTab):
 
         list_frame = ttk.Frame(list_manage_frame)
         list_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
-        ttk.Label(list_frame, text="Current Game ROIs ([O]=Overlay, [C]=Color, [P]=Preproc):").pack(anchor=tk.W) # Updated label
+        ttk.Label(list_frame, text="Current Game ROIs ([O]=Overlay, [C]=Color, [P]=Preproc, [X]=Cutout, [I]=Invert):").pack(anchor=tk.W) # Updated label
         roi_scrollbar = ttk.Scrollbar(list_frame)
         roi_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.roi_listbox = tk.Listbox(list_frame, height=6, selectmode=tk.SINGLE, exportselection=False, yscrollcommand=roi_scrollbar.set)
@@ -77,7 +76,6 @@ class ROITab(BaseTab):
         self._build_preprocessing_widgets() # Call helper to build
 
         # --- Apply & Preview Buttons (Combined) ---
-        # *** FIX: Create this frame directly in setup_ui, parented to bottom_frame ***
         action_btn_frame = ttk.Frame(bottom_frame)
         action_btn_frame.pack(fill=tk.X, pady=(10, 5), padx=5)
 
@@ -87,7 +85,6 @@ class ROITab(BaseTab):
         self.preview_orig_btn.pack(side=tk.LEFT, padx=5)
         self.preview_filter_btn = ttk.Button(action_btn_frame, text="Preview Processed", command=self.show_processed_preview)
         self.preview_filter_btn.pack(side=tk.LEFT, padx=5)
-        # *** End FIX ***
 
         # --- Bottom part: Save All ROIs ---
         file_btn_frame = ttk.Frame(bottom_frame)
@@ -149,9 +146,11 @@ class ROITab(BaseTab):
         defaults = ROI.DEFAULT_PREPROCESSING
 
         # --- Column Configuration ---
-        frame.columnconfigure(1, weight=0)
-        frame.columnconfigure(3, weight=1) # Give space to adaptive params
-        frame.columnconfigure(5, weight=1) # Give space to sharpen scale
+        frame.columnconfigure(1, weight=0) # Standard widgets
+        frame.columnconfigure(2, weight=0) # Labels/Spinners
+        frame.columnconfigure(3, weight=0) # Standard widgets
+        frame.columnconfigure(4, weight=1) # Scales/Expandable
+        frame.columnconfigure(5, weight=0) # Labels/Spinners
 
         row = 0
 
@@ -159,6 +158,10 @@ class ROITab(BaseTab):
         widgets['grayscale_var'] = tk.BooleanVar(value=defaults['grayscale'])
         widgets['grayscale_check'] = ttk.Checkbutton(frame, text="Grayscale", variable=widgets['grayscale_var'])
         widgets['grayscale_check'].grid(row=row, column=0, sticky=tk.W, padx=5, pady=2)
+
+        widgets['invert_colors_var'] = tk.BooleanVar(value=defaults['invert_colors'])
+        widgets['invert_colors_check'] = ttk.Checkbutton(frame, text="Invert Colors", variable=widgets['invert_colors_var'])
+        widgets['invert_colors_check'].grid(row=row, column=3, sticky=tk.W, padx=5, pady=2)
         row += 1
 
         # --- Sharpening (Slider) ---
@@ -190,6 +193,22 @@ class ROITab(BaseTab):
         widgets['scale_factor_spin'] = ttk.Spinbox(frame, from_=0.5, to=4.0, increment=0.1, width=5, textvariable=widgets['scale_factor_var'])
         widgets['scale_factor_spin'].grid(row=row, column=1, sticky=tk.W, padx=5, pady=2)
         ttk.Label(frame, text="Factor").grid(row=row, column=2, sticky=tk.W, padx=(0,5), pady=2)
+        row += 1
+
+        # --- Cutout ---
+        widgets['cutout_enabled_var'] = tk.BooleanVar(value=defaults['cutout_enabled'])
+        widgets['cutout_enabled_check'] = ttk.Checkbutton(frame, text="Cutout Blank Space", variable=widgets['cutout_enabled_var'])
+        widgets['cutout_enabled_check'].grid(row=row, column=0, sticky=tk.W, padx=5, pady=2)
+
+        widgets['cutout_padding_var'] = tk.IntVar(value=defaults['cutout_padding'])
+        widgets['cutout_padding_spin'] = ttk.Spinbox(frame, from_=0, to=50, increment=1, width=5, textvariable=widgets['cutout_padding_var'])
+        widgets['cutout_padding_spin'].grid(row=row, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(frame, text="Pad").grid(row=row, column=2, sticky=tk.W, padx=(0,5), pady=2)
+
+        widgets['cutout_bg_threshold_var'] = tk.IntVar(value=defaults['cutout_bg_threshold'])
+        widgets['cutout_bg_threshold_spin'] = ttk.Spinbox(frame, from_=0, to=127, increment=1, width=5, textvariable=widgets['cutout_bg_threshold_var'])
+        widgets['cutout_bg_threshold_spin'].grid(row=row, column=3, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(frame, text="BG Thresh").grid(row=row, column=4, sticky=tk.W, padx=(0,5), pady=2)
         row += 1
 
         # --- Binarization ---
@@ -410,6 +429,12 @@ class ROITab(BaseTab):
             widgets['erosion_enabled_var'].set(settings.get('erosion_enabled', defaults['erosion_enabled']))
             widgets['morph_ksize_var'].set(settings.get('morph_ksize', defaults['morph_ksize']))
 
+            # Load new cutout and invert settings
+            widgets['cutout_enabled_var'].set(settings.get('cutout_enabled', defaults['cutout_enabled']))
+            widgets['cutout_padding_var'].set(settings.get('cutout_padding', defaults['cutout_padding']))
+            widgets['cutout_bg_threshold_var'].set(settings.get('cutout_bg_threshold', defaults['cutout_bg_threshold']))
+            widgets['invert_colors_var'].set(settings.get('invert_colors', defaults['invert_colors']))
+
             # Update adaptive param visibility after loading
             self._update_adaptive_param_state()
         except tk.TclError: print("TclError loading preprocessing settings (widget might be destroyed).")
@@ -486,6 +511,19 @@ class ROITab(BaseTab):
                 new_preprocess_settings['sharpening_strength'] = sharpen_strength
                 widgets['sharpening_strength_var'].set(sharpen_strength) # Reset UI
                 widgets['sharpening_strength_label_var'].set(f"{sharpen_strength:.2f}") # Reset UI label
+
+            # Validate new cutout settings
+            cutout_pad = new_preprocess_settings.get('cutout_padding', defaults['cutout_padding'])
+            if cutout_pad < 0:
+                messagebox.showwarning("Invalid Value", f"Cutout Padding ({cutout_pad}) must be >= 0. Using default.", parent=self.app.master)
+                new_preprocess_settings['cutout_padding'] = defaults['cutout_padding']
+                widgets['cutout_padding_var'].set(defaults['cutout_padding']) # Reset UI
+
+            cutout_thresh = new_preprocess_settings.get('cutout_bg_threshold', defaults['cutout_bg_threshold'])
+            if not (0 <= cutout_thresh <= 127):
+                messagebox.showwarning("Invalid Value", f"Cutout BG Threshold ({cutout_thresh}) must be between 0 and 127. Using default.", parent=self.app.master)
+                new_preprocess_settings['cutout_bg_threshold'] = defaults['cutout_bg_threshold']
+                widgets['cutout_bg_threshold_var'].set(defaults['cutout_bg_threshold']) # Reset UI
 
 
             roi.preprocessing = new_preprocess_settings # Update the ROI's dict
@@ -617,14 +655,23 @@ class ROITab(BaseTab):
                 defaults = ROI.DEFAULT_PREPROCESSING
                 for key in defaults:
                     var_name = f"{key}_var"
-                    if var_name in widgets: temp_preprocess[key] = widgets[var_name].get()
-                    elif key == "binarization_type": temp_preprocess[key] = widgets['binarization_type_var'].get()
-                    else: temp_preprocess[key] = defaults[key]
+                    if var_name in widgets:
+                        # Get value, special handling for doublevar
+                        if isinstance(widgets[var_name], tk.DoubleVar):
+                            value = round(widgets[var_name].get(), 3)
+                        else:
+                            value = widgets[var_name].get()
+                        temp_preprocess[key] = value
+                    elif key == "binarization_type":
+                        temp_preprocess[key] = widgets['binarization_type_var'].get()
+                    else:
+                        temp_preprocess[key] = defaults[key]
                 temp_roi.preprocessing = temp_preprocess
 
-                # Apply processing steps
+                # Apply processing steps in the correct order
                 img_after_color = temp_roi.apply_color_filter(roi_img_original.copy())
-                preview_img = temp_roi.apply_ocr_preprocessing(img_after_color) # Apply preprocessing
+                # Pass the color-filtered image to preprocessing
+                preview_img = temp_roi.apply_ocr_preprocessing(img_after_color)
 
                 if preview_img is None:
                     messagebox.showerror("Error", "Failed to apply processing for preview.", parent=self.app.master)
@@ -641,6 +688,7 @@ class ROITab(BaseTab):
             if len(preview_img.shape) == 2: # Grayscale
                 preview_img_rgb = cv2.cvtColor(preview_img, cv2.COLOR_GRAY2RGB)
             elif len(preview_img.shape) == 3 and preview_img.shape[2] == 3: # BGR/RGB
+                # Assume BGR from OpenCV steps, convert to RGB for display
                 preview_img_rgb = cv2.cvtColor(preview_img, cv2.COLOR_BGR2RGB)
             else:
                 raise ValueError("Unsupported image format for preview")
@@ -678,14 +726,20 @@ class ROITab(BaseTab):
             # Color Filter Status
             color_prefix = "[C]" if roi.color_filter_enabled else "[ ]"
 
-            # Preprocessing Status
-            # Check if any boolean flag is True OR binarization is not None OR sharpening > 0
-            preprocess_enabled = any(v for k, v in roi.preprocessing.items() if isinstance(v, bool) and v) \
+            # Preprocessing Status (Basic check)
+            preprocess_enabled = any(v for k, v in roi.preprocessing.items() if isinstance(v, bool) and v and k not in ['cutout_enabled', 'invert_colors']) \
                                  or roi.preprocessing.get("binarization_type", "None") != "None" \
                                  or roi.preprocessing.get("sharpening_strength", 0.0) > 0.0
             preprocess_prefix = "[P]" if preprocess_enabled else "[ ]"
 
-            self.roi_listbox.insert(tk.END, f"{overlay_prefix}{color_prefix}{preprocess_prefix} {roi.name}")
+            # Cutout Status
+            cutout_prefix = "[X]" if roi.preprocessing.get("cutout_enabled", False) else "[ ]"
+
+            # Invert Status
+            invert_prefix = "[I]" if roi.preprocessing.get("invert_colors", False) else "[ ]"
+
+            # Construct the display string with all indicators
+            self.roi_listbox.insert(tk.END, f"{overlay_prefix}{color_prefix}{preprocess_prefix}{cutout_prefix}{invert_prefix} {roi.name}")
 
         new_idx_to_select = -1
         if selected_text:

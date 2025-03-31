@@ -1,4 +1,3 @@
-# --- START OF FILE utils/roi.py ---
 
 import cv2
 import numpy as np
@@ -20,6 +19,12 @@ class ROI:
         "dilation_enabled": False,
         "erosion_enabled": False,
         "morph_ksize": 3,
+        # New Cutout settings
+        "cutout_enabled": False,
+        "cutout_padding": 5,
+        "cutout_bg_threshold": 15, # Threshold to consider a pixel as background (for near black/white)
+        # New Invert setting
+        "invert_colors": False,
     }
 
     def __init__(self, name, x1, y1, x2, y2,
@@ -69,6 +74,12 @@ class ROI:
                         elif key == "sharpening_strength" and (not isinstance(value, (int, float)) or value < 0): # Check >= 0
                             print(f"Warning: Invalid sharpening_strength '{value}' for ROI '{name}'. Using default.")
                             self.preprocessing[key] = default_value
+                        elif key == "cutout_padding" and (not isinstance(value, int) or value < 0):
+                            print(f"Warning: Invalid cutout_padding '{value}' for ROI '{name}'. Using default.")
+                            self.preprocessing[key] = default_value
+                        elif key == "cutout_bg_threshold" and (not isinstance(value, int) or not (0 <= value <= 127)):
+                            print(f"Warning: Invalid cutout_bg_threshold '{value}' for ROI '{name}'. Using default.")
+                            self.preprocessing[key] = default_value
                         else:
                             self.preprocessing[key] = value
                     # Handle case where sharpening_enabled (bool) might be in old config
@@ -114,7 +125,10 @@ class ROI:
         color_threshold = data.get("color_threshold", 30)
         replacement_color = data.get("replacement_color", cls.DEFAULT_REPLACEMENT_COLOR_RGB)
         # Load preprocessing settings, falling back to defaults if missing
-        preprocessing_settings = data.get("preprocessing", cls.DEFAULT_PREPROCESSING.copy())
+        preprocessing_settings = cls.DEFAULT_PREPROCESSING.copy() # Start with defaults
+        loaded_preprocessing = data.get("preprocessing", {})
+        if isinstance(loaded_preprocessing, dict):
+            preprocessing_settings.update(loaded_preprocessing) # Update with loaded values
 
         # Handle potential old boolean 'sharpening_enabled' key when loading
         if "sharpening_enabled" in preprocessing_settings and isinstance(preprocessing_settings["sharpening_enabled"], bool):
@@ -182,6 +196,70 @@ class ROI:
             print(f"Error applying color filter for ROI {self.name}: {e}")
             return roi_img # Return original on error
 
+    def _cutout_blank_space(self, img, padding, bg_threshold):
+        """Removes blank (near black or near white) borders from an image."""
+        if img is None: return None
+        try:
+            # Convert to grayscale for thresholding
+            if len(img.shape) == 3 and img.shape[2] == 3:
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            elif len(img.shape) == 2:
+                gray = img
+            else:
+                print("Warning: Unsupported image format for cutout.")
+                return img
+
+            # Threshold to identify potential background pixels (near black OR near white)
+            # Pixels *below* bg_threshold or *above* (255 - bg_threshold) are considered background
+            _, thresh_dark = cv2.threshold(gray, bg_threshold, 255, cv2.THRESH_BINARY_INV)
+            _, thresh_light = cv2.threshold(gray, 255 - bg_threshold, 255, cv2.THRESH_BINARY)
+            # Combine masks: non-dark AND non-light pixels are foreground
+            foreground_mask = cv2.bitwise_and(thresh_dark, cv2.bitwise_not(thresh_light))
+
+            # Find contours of the foreground regions
+            contours, _ = cv2.findContours(foreground_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            if not contours:
+                # print(f"Warning: No foreground contours found for cutout in ROI {self.name}.")
+                return img # Return original if no content found
+
+            # Find the bounding box encompassing all contours
+            min_x, min_y = img.shape[1], img.shape[0]
+            max_x, max_y = 0, 0
+            for contour in contours:
+                x, y, w, h = cv2.boundingRect(contour)
+                min_x = min(min_x, x)
+                min_y = min(min_y, y)
+                max_x = max(max_x, x + w)
+                max_y = max(max_y, y + h)
+
+            # Add padding, ensuring bounds stay within the original image dimensions
+            pad = max(0, padding) # Ensure padding is non-negative
+            x1 = max(0, min_x - pad)
+            y1 = max(0, min_y - pad)
+            x2 = min(img.shape[1], max_x + pad)
+            y2 = min(img.shape[0], max_y + pad)
+
+            # Crop the original image (color or grayscale)
+            if y1 < y2 and x1 < x2:
+                return img[y1:y2, x1:x2]
+            else:
+                # print(f"Warning: Invalid cutout dimensions after padding for ROI {self.name}.")
+                return img # Return original if dimensions invalid
+
+        except Exception as e:
+            print(f"Error during cutout for ROI {self.name}: {e}")
+            return img # Return original on error
+
+    def _invert_colors(self, img):
+        """Inverts the colors of the image."""
+        if img is None: return None
+        try:
+            return cv2.bitwise_not(img)
+        except Exception as e:
+            print(f"Error inverting colors for ROI {self.name}: {e}")
+            return img # Return original on error
+
     def apply_ocr_preprocessing(self, roi_img):
         """Applies configured OCR preprocessing steps to the ROI image."""
         if roi_img is None:
@@ -198,6 +276,15 @@ class ROI:
                     new_height = int(img.shape[0] * factor)
                     if new_width > 0 and new_height > 0:
                         img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+
+            # --- Cutout Blank Space (After Scaling) ---
+            if self.preprocessing.get("cutout_enabled", False):
+                padding = self.preprocessing.get("cutout_padding", 5)
+                threshold = self.preprocessing.get("cutout_bg_threshold", 15)
+                img = self._cutout_blank_space(img, padding, threshold)
+                if img is None or img.size == 0: # Check if cutout resulted in empty image
+                    print(f"Warning: Cutout resulted in empty image for ROI {self.name}")
+                    return None # Return None if cutout failed or removed everything
 
             # --- Grayscaling ---
             # Grayscale is often needed before binarization or sharpening
@@ -246,7 +333,9 @@ class ROI:
                         is_gray = True
                     elif len(img.shape) != 2:
                         print(f"Warning: Cannot binarize non-grayscale image for ROI {self.name}")
-                        return img # Return image before binarization attempt
+                        # Decide whether to return original or current state
+                        # Returning current state might be more useful for debugging
+                        return img
 
                 if is_gray: # Proceed only if grayscale
                     if bin_type == "Otsu":
@@ -258,6 +347,10 @@ class ROI:
                         if block_size < 3 or block_size % 2 == 0: block_size = 11
                         img = cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                                                     cv2.THRESH_BINARY, block_size, c_value)
+
+            # --- Color Inversion (Applied after potential binarization) ---
+            if self.preprocessing.get("invert_colors", False):
+                img = self._invert_colors(img)
 
             # --- Noise Reduction (Median Blur) ---
             if self.preprocessing.get("median_blur_enabled", False):

@@ -229,8 +229,8 @@ class CaptureTab(BaseTab):
         self.refresh_btn.config(state=tk.DISABLED)
         self.window_combo.config(state=tk.DISABLED)
         # Disable engine/lang changes while capturing
-        self.engine_combo.config(state=tk.DISABLED)
-        self.lang_combo.config(state=tk.DISABLED)
+        #self.engine_combo.config(state=tk.DISABLED)
+        #self.lang_combo.config(state=tk.DISABLED)
         # Enable relevant buttons
         self.stop_btn.config(state=tk.NORMAL)
         self.snapshot_btn.config(state=tk.NORMAL)

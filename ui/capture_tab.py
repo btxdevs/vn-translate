@@ -1,16 +1,29 @@
+# --- START OF FILE capture_tab.py ---
+
 import tkinter as tk
 from tkinter import ttk
 from ui.base import BaseTab
 from utils.capture import get_windows, get_window_title
 from utils.settings import get_setting, set_setting
-from utils.ocr import _windows_ocr_available # Import check function
+# Import availability checks for all relevant engines
+from utils.ocr import _windows_ocr_available, _tesseract_available, _paddle_available, _easyocr_available
 
 class CaptureTab(BaseTab):
     OCR_LANGUAGES = ["jpn", "jpn_vert", "eng", "chi_sim", "chi_tra", "kor"]
-    # Define available engines
-    OCR_ENGINES = ["paddle", "easyocr"]
-    if _windows_ocr_available: # Conditionally add Windows OCR
+
+    # Define available engines dynamically based on imports
+    OCR_ENGINES = []
+    if _paddle_available:
+        OCR_ENGINES.append("paddle")
+    if _easyocr_available:
+        OCR_ENGINES.append("easyocr")
+    if _windows_ocr_available:
         OCR_ENGINES.append("windows")
+    if _tesseract_available:
+        OCR_ENGINES.append("tesseract")
+
+    # Set a default engine if the list is somehow empty, or use the first available
+    DEFAULT_OCR_ENGINE = OCR_ENGINES[0] if OCR_ENGINES else "none" # Handle case where no engines are available
 
     def setup_ui(self):
         capture_frame = ttk.LabelFrame(self.frame, text="Capture Settings", padding="10")
@@ -53,11 +66,19 @@ class CaptureTab(BaseTab):
         self.engine_var = tk.StringVar()
         self.engine_combo = ttk.Combobox(ocr_frame, textvariable=self.engine_var, width=12,
                                          values=self.OCR_ENGINES, state="readonly")
-        default_engine = get_setting("ocr_engine", "paddle")
+
+        # Set default engine from settings or fallback
+        default_engine = get_setting("ocr_engine", self.DEFAULT_OCR_ENGINE)
         if default_engine in self.OCR_ENGINES:
             self.engine_combo.set(default_engine)
-        elif self.OCR_ENGINES:
-            self.engine_combo.current(0) # Default to first available
+        elif self.OCR_ENGINES: # If saved default isn't available, use the first available one
+            self.engine_combo.set(self.OCR_ENGINES[0])
+            set_setting("ocr_engine", self.OCR_ENGINES[0]) # Update setting to a valid one
+        else:
+            # No engines available - disable the combobox?
+            self.engine_combo.set("None Available")
+            self.engine_combo.config(state=tk.DISABLED)
+
         self.engine_combo.pack(side=tk.LEFT, anchor=tk.W, padx=5)
         self.engine_combo.bind("<<ComboboxSelected>>", self.on_engine_selected)
 
@@ -80,6 +101,9 @@ class CaptureTab(BaseTab):
 
         # Initial population
         self.refresh_window_list()
+        # Initial setup of OCR engine based on default/saved value
+        self.app.set_ocr_engine(self.engine_var.get(), self.lang_var.get())
+
 
     def refresh_window_list(self):
         self.app.update_status("Refreshing window list...")
@@ -93,7 +117,9 @@ class CaptureTab(BaseTab):
                 title = get_window_title(hwnd)
                 # Basic filtering
                 if title and title != app_title and "Program Manager" not in title and "Default IME" not in title:
-                    filtered_windows[hwnd] = f"{hwnd}: {title}"
+                    # Limit title length for display
+                    display_title = title[:80] + '...' if len(title) > 80 else title
+                    filtered_windows[hwnd] = f"{hwnd}: {display_title}"
 
             window_titles = list(filtered_windows.values())
             self.window_handles = list(filtered_windows.keys()) # Store HWNDs in the same order
@@ -106,6 +132,7 @@ class CaptureTab(BaseTab):
                     try:
                         idx = self.window_handles.index(last_hwnd)
                         self.window_combo.current(idx)
+                        # No need to call on_window_selected here, just restore state
                     except ValueError:
                         # Handle case where HWND exists but somehow index fails (shouldn't happen)
                         self.app.selected_hwnd = None
@@ -134,16 +161,21 @@ class CaptureTab(BaseTab):
                 new_hwnd = self.window_handles[selected_index]
                 if new_hwnd != self.app.selected_hwnd:
                     self.app.selected_hwnd = new_hwnd
-                    title = self.window_combo.get().split(":", 1)[-1].strip()
-                    self.app.update_status(f"Window selected: {title}")
+                    # Get full title for status, not truncated one from combobox if possible
+                    try:
+                        full_title = get_window_title(new_hwnd)
+                    except Exception:
+                        full_title = self.window_combo.get().split(":", 1)[-1].strip() # Fallback
+
+                    self.app.update_status(f"Window selected: {full_title}")
                     print(f"Selected window HWND: {self.app.selected_hwnd}")
                     # Load ROIs and context specific to this window
                     self.app.load_rois_for_hwnd(new_hwnd)
                     # If capture was running, maybe notify user to restart?
                     if self.app.capturing:
-                        self.app.update_status(f"Window changed to {title}. Restart capture if needed.")
+                        self.app.update_status(f"Window changed to {full_title}. Restart capture if needed.")
             else:
-                # Handle case where selection is somehow invalid
+                # Handle case where selection is somehow invalid (e.g., list empty, index -1)
                 if self.app.selected_hwnd is not None:
                     self.app.selected_hwnd = None
                     self.app.update_status("No window selected.")
@@ -162,10 +194,12 @@ class CaptureTab(BaseTab):
             set_setting("ocr_engine", new_engine)
             # Trigger the app to update/initialize the selected engine
             # Pass the currently selected language as well
-            current_lang = self.lang_var.get() or "jpn"
+            current_lang = self.lang_var.get() or "jpn" # Use current lang or default
             self.app.set_ocr_engine(new_engine, current_lang)
+        elif new_engine == "None Available":
+            self.app.update_status("No OCR engines are available.")
         else:
-            self.app.update_status("Invalid OCR engine selected.")
+            self.app.update_status(f"Invalid OCR engine selected: {new_engine}")
 
     def on_language_changed(self, event=None):
         """Handles selection of a new OCR language."""
@@ -175,8 +209,13 @@ class CaptureTab(BaseTab):
             set_setting("ocr_language", new_lang)
             # Trigger the app to update the OCR engine with the new language
             # Pass the currently selected engine type
-            current_engine = self.engine_var.get() or "paddle"
-            self.app.update_ocr_language(new_lang, current_engine)
+            current_engine = self.engine_var.get()
+            if current_engine in self.OCR_ENGINES: # Only update if a valid engine is selected
+                self.app.update_ocr_language(new_lang, current_engine)
+            elif current_engine == "None Available":
+                self.app.update_status("Cannot change language, no OCR engine available.")
+            else:
+                self.app.update_status("Cannot change language, invalid engine selected.")
         else:
             self.app.update_status("Invalid language selected.")
 
@@ -189,6 +228,10 @@ class CaptureTab(BaseTab):
         self.start_btn.config(state=tk.DISABLED)
         self.refresh_btn.config(state=tk.DISABLED)
         self.window_combo.config(state=tk.DISABLED)
+        # Disable engine/lang changes while capturing
+        self.engine_combo.config(state=tk.DISABLED)
+        self.lang_combo.config(state=tk.DISABLED)
+        # Enable relevant buttons
         self.stop_btn.config(state=tk.NORMAL)
         self.snapshot_btn.config(state=tk.NORMAL)
         self.live_view_btn.config(state=tk.DISABLED) # Cannot return to live if already live
@@ -197,17 +240,18 @@ class CaptureTab(BaseTab):
         self.start_btn.config(state=tk.NORMAL)
         self.refresh_btn.config(state=tk.NORMAL)
         self.window_combo.config(state="readonly") # Re-enable selection
+        # Re-enable engine/lang changes
+        if self.OCR_ENGINES: # Only enable if engines are actually available
+            self.engine_combo.config(state="readonly")
+        self.lang_combo.config(state="readonly")
+        # Disable relevant buttons
         self.stop_btn.config(state=tk.DISABLED)
         self.snapshot_btn.config(state=tk.DISABLED) # Cannot snapshot if not capturing
         self.live_view_btn.config(state=tk.DISABLED)
 
     def on_snapshot_taken(self):
         # Snapshot implies capture was running, so keep stop/snapshot enabled
-        # self.start_btn.config(state=tk.DISABLED) # Keep disabled
-        # self.refresh_btn.config(state=tk.DISABLED) # Keep disabled
-        # self.window_combo.config(state=tk.DISABLED) # Keep disabled
-        # self.stop_btn.config(state=tk.NORMAL) # Keep enabled
-        # self.snapshot_btn.config(state=tk.NORMAL) # Keep enabled
+        # Keep engine/lang disabled as capture context is still active
         self.live_view_btn.config(state=tk.NORMAL) # Enable returning to live
 
     def on_live_view_resumed(self):
@@ -215,8 +259,9 @@ class CaptureTab(BaseTab):
         # Restore state based on whether capture is still active
         if self.app.capturing:
             self.snapshot_btn.config(state=tk.NORMAL)
-            # Other buttons should already be in the 'capturing' state
+            # Other buttons should already be in the 'capturing' state (including disabled engine/lang)
         else:
             # If capture somehow stopped while snapshot was active, reset fully
-            self.snapshot_btn.config(state=tk.DISABLED)
-            self.on_capture_stopped()
+            self.on_capture_stopped() # This handles re-enabling controls
+
+# --- END OF FILE capture_tab.py ---

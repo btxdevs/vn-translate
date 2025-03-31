@@ -6,10 +6,26 @@ import tkinter as tk # Added for color conversion
 
 class ROI:
     DEFAULT_REPLACEMENT_COLOR_RGB = (128, 128, 128) # Default to gray
+    BINARIZATION_TYPES = ["None", "Otsu", "Adaptive Gaussian"]
+    DEFAULT_PREPROCESSING = {
+        "grayscale": False,
+        "binarization_type": "None",
+        "adaptive_block_size": 11,
+        "adaptive_c_value": 2,
+        "scaling_enabled": False,
+        "scale_factor": 1.5,
+        "sharpening_strength": 0.0, # Changed from boolean to float (0.0 = off)
+        "median_blur_enabled": False,
+        "median_blur_ksize": 3,
+        "dilation_enabled": False,
+        "erosion_enabled": False,
+        "morph_ksize": 3,
+    }
 
     def __init__(self, name, x1, y1, x2, y2,
                  color_filter_enabled=False, target_color=(255, 255, 255), color_threshold=30,
-                 replacement_color=DEFAULT_REPLACEMENT_COLOR_RGB): # Added replacement_color
+                 replacement_color=DEFAULT_REPLACEMENT_COLOR_RGB,
+                 preprocessing_settings=None): # Added preprocessing_settings
         self.name = name
         self.x1 = min(x1, x2)
         self.y1 = min(y1, y2)
@@ -18,17 +34,51 @@ class ROI:
 
         # Color Filtering Attributes
         self.color_filter_enabled = color_filter_enabled
-
-        # Store target_color consistently as an RGB tuple (int, int, int)
         self.target_color = self._parse_color_input(target_color, (255, 255, 255))
-
-        # Store replacement_color consistently as an RGB tuple
         self.replacement_color = self._parse_color_input(replacement_color, self.DEFAULT_REPLACEMENT_COLOR_RGB)
-
         try:
             self.color_threshold = int(color_threshold)
         except (ValueError, TypeError):
             self.color_threshold = 30
+
+        # OCR Preprocessing Attributes
+        self.preprocessing = self.DEFAULT_PREPROCESSING.copy()
+        if preprocessing_settings and isinstance(preprocessing_settings, dict):
+            # Validate and update defaults with provided settings
+            for key, default_value in self.DEFAULT_PREPROCESSING.items():
+                if key in preprocessing_settings:
+                    value = preprocessing_settings[key]
+                    # Basic type validation (can be expanded)
+                    if isinstance(value, type(default_value)):
+                        # Specific validation for certain keys
+                        if key == "binarization_type" and value not in self.BINARIZATION_TYPES:
+                            print(f"Warning: Invalid binarization_type '{value}' for ROI '{name}'. Using default.")
+                            self.preprocessing[key] = default_value
+                        elif key == "adaptive_block_size" and (not isinstance(value, int) or value < 3 or value % 2 == 0):
+                            print(f"Warning: Invalid adaptive_block_size '{value}' for ROI '{name}'. Using default.")
+                            self.preprocessing[key] = default_value
+                        elif key == "median_blur_ksize" and (not isinstance(value, int) or value < 3 or value % 2 == 0):
+                            print(f"Warning: Invalid median_blur_ksize '{value}' for ROI '{name}'. Using default.")
+                            self.preprocessing[key] = default_value
+                        elif key == "morph_ksize" and (not isinstance(value, int) or value < 1):
+                            print(f"Warning: Invalid morph_ksize '{value}' for ROI '{name}'. Using default.")
+                            self.preprocessing[key] = default_value
+                        elif key == "scale_factor" and (not isinstance(value, (int, float)) or value <= 0):
+                            print(f"Warning: Invalid scale_factor '{value}' for ROI '{name}'. Using default.")
+                            self.preprocessing[key] = default_value
+                        elif key == "sharpening_strength" and (not isinstance(value, (int, float)) or value < 0): # Check >= 0
+                            print(f"Warning: Invalid sharpening_strength '{value}' for ROI '{name}'. Using default.")
+                            self.preprocessing[key] = default_value
+                        else:
+                            self.preprocessing[key] = value
+                    # Handle case where sharpening_enabled (bool) might be in old config
+                    elif key == "sharpening_strength" and isinstance(value, bool):
+                        print(f"Warning: Found boolean 'sharpening_enabled' for ROI '{name}'. Converting to strength (0.0 or 0.5).")
+                        self.preprocessing[key] = 0.5 if value else 0.0 # Convert old bool to float
+                    else:
+                        print(f"Warning: Type mismatch for preprocessing key '{key}' for ROI '{name}'. Using default.")
+                        self.preprocessing[key] = default_value
+
 
     def _parse_color_input(self, color_input, default_rgb):
         """Parses hex string or tuple/list into an RGB tuple."""
@@ -52,7 +102,8 @@ class ROI:
             "color_filter_enabled": self.color_filter_enabled,
             "target_color": self.target_color, # Save as RGB tuple
             "color_threshold": self.color_threshold,
-            "replacement_color": self.replacement_color # Save replacement color
+            "replacement_color": self.replacement_color, # Save replacement color
+            "preprocessing": self.preprocessing # Save preprocessing settings
         }
 
     @classmethod
@@ -61,11 +112,20 @@ class ROI:
         color_filter_enabled = data.get("color_filter_enabled", False)
         target_color = data.get("target_color", (255, 255, 255)) # Expecting RGB tuple
         color_threshold = data.get("color_threshold", 30)
-        # Default replacement color if missing in saved data
         replacement_color = data.get("replacement_color", cls.DEFAULT_REPLACEMENT_COLOR_RGB)
+        # Load preprocessing settings, falling back to defaults if missing
+        preprocessing_settings = data.get("preprocessing", cls.DEFAULT_PREPROCESSING.copy())
+
+        # Handle potential old boolean 'sharpening_enabled' key when loading
+        if "sharpening_enabled" in preprocessing_settings and isinstance(preprocessing_settings["sharpening_enabled"], bool):
+            print("Note: Converting old 'sharpening_enabled' key during load.")
+            strength = 0.5 if preprocessing_settings["sharpening_enabled"] else 0.0
+            preprocessing_settings["sharpening_strength"] = strength
+            del preprocessing_settings["sharpening_enabled"] # Remove old key
 
         return cls(data["name"], data["x1"], data["y1"], data["x2"], data["y2"],
-                   color_filter_enabled, target_color, color_threshold, replacement_color)
+                   color_filter_enabled, target_color, color_threshold, replacement_color,
+                   preprocessing_settings) # Pass loaded settings
 
     def extract_roi(self, frame):
         """Extracts the ROI portion from the frame."""
@@ -78,6 +138,7 @@ class ROI:
             x2 = min(w, int(self.x2))
             # Check for invalid dimensions after clamping
             if y1 >= y2 or x1 >= x2:
+                print(f"Warning: Invalid dimensions after clamping for ROI {self.name}")
                 return None
             return frame[y1:y2, x1:x2]
         except Exception as e:
@@ -121,23 +182,112 @@ class ROI:
             print(f"Error applying color filter for ROI {self.name}: {e}")
             return roi_img # Return original on error
 
-    def get_overlay_config(self, global_settings):
-        # This remains unchanged, deals only with overlay appearance
-        from ui.overlay_manager import OverlayManager # Keep import local if needed
+    def apply_ocr_preprocessing(self, roi_img):
+        """Applies configured OCR preprocessing steps to the ROI image."""
+        if roi_img is None:
+            return None
+
+        img = roi_img.copy() # Work on a copy
+
         try:
-            defaults = OverlayManager.DEFAULT_OVERLAY_CONFIG.copy()
-        except AttributeError:
-            defaults = {
-                "enabled": True, "font_family": "Segoe UI", "font_size": 14,
-                "font_color": "white", "bg_color": "#222222", "alpha": 1.0,
-                "wraplength": 450, "justify": "left", "geometry": None
-            }
+            # --- Scaling ---
+            if self.preprocessing.get("scaling_enabled", False):
+                factor = self.preprocessing.get("scale_factor", 1.5)
+                if factor > 0 and factor != 1.0:
+                    new_width = int(img.shape[1] * factor)
+                    new_height = int(img.shape[0] * factor)
+                    if new_width > 0 and new_height > 0:
+                        img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
 
-        roi_specific_settings = global_settings.get('overlay_settings', {}).get(self.name, {})
-        config = defaults.copy()
-        config.update(roi_specific_settings)
-        return config
+            # --- Grayscaling ---
+            # Grayscale is often needed before binarization or sharpening
+            is_gray = False
+            if self.preprocessing.get("grayscale", False) or self.preprocessing.get("binarization_type", "None") != "None":
+                if len(img.shape) == 3 and img.shape[2] == 3: # Check if it's color
+                    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                    is_gray = True
+                elif len(img.shape) == 2: # Already grayscale
+                    is_gray = True
 
+            # --- Sharpening (using blending) ---
+            strength = self.preprocessing.get("sharpening_strength", 0.0)
+            if strength > 0.0:
+                # Keep a copy of the image *before* potential grayscale conversion if needed
+                # If already gray, use the gray version for blending base
+                img_before_sharpen = img.copy()
+
+                # Apply sharpening kernel
+                kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+                # Apply kernel to the current state of 'img' (could be gray or color)
+                sharpened_img = cv2.filter2D(img, -1, kernel)
+
+                # Ensure strength is within a reasonable range (e.g., 0 to 1 for blending weight)
+                blend_strength = max(0.0, min(1.0, strength))
+
+                # Blend the original (before sharpening) and the sharpened image
+                # Weight for original = 1 - blend_strength
+                # Weight for sharpened = blend_strength
+                img = cv2.addWeighted(img_before_sharpen, 1.0 - blend_strength, sharpened_img, blend_strength, 0)
+
+                # Ensure the output type remains uint8 if it was before blending
+                img = np.clip(img, 0, 255).astype(np.uint8)
+
+                # Update is_gray flag if sharpening was applied to a color image and resulted in grayscale (unlikely with blend)
+                if not is_gray and len(img.shape) == 2:
+                    is_gray = True
+
+
+            # --- Binarization ---
+            bin_type = self.preprocessing.get("binarization_type", "None")
+            if bin_type != "None":
+                if not is_gray: # Ensure image is grayscale for thresholding
+                    if len(img.shape) == 3 and img.shape[2] == 3:
+                        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                        is_gray = True
+                    elif len(img.shape) != 2:
+                        print(f"Warning: Cannot binarize non-grayscale image for ROI {self.name}")
+                        return img # Return image before binarization attempt
+
+                if is_gray: # Proceed only if grayscale
+                    if bin_type == "Otsu":
+                        _, img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                    elif bin_type == "Adaptive Gaussian":
+                        block_size = self.preprocessing.get("adaptive_block_size", 11)
+                        c_value = self.preprocessing.get("adaptive_c_value", 2)
+                        # Ensure block_size is odd and >= 3
+                        if block_size < 3 or block_size % 2 == 0: block_size = 11
+                        img = cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                                    cv2.THRESH_BINARY, block_size, c_value)
+
+            # --- Noise Reduction (Median Blur) ---
+            if self.preprocessing.get("median_blur_enabled", False):
+                ksize = self.preprocessing.get("median_blur_ksize", 3)
+                # Ensure ksize is odd and >= 3
+                if ksize < 3 or ksize % 2 == 0: ksize = 3
+                img = cv2.medianBlur(img, ksize)
+
+            # --- Morphological Operations (Dilation/Erosion) ---
+            # These often work best on binary images
+            morph_ksize = self.preprocessing.get("morph_ksize", 3)
+            if morph_ksize < 1: morph_ksize = 3
+            kernel = np.ones((morph_ksize, morph_ksize), np.uint8)
+
+            if self.preprocessing.get("dilation_enabled", False):
+                img = cv2.dilate(img, kernel, iterations=1)
+
+            if self.preprocessing.get("erosion_enabled", False):
+                img = cv2.erode(img, kernel, iterations=1)
+
+            return img
+
+        except Exception as e:
+            print(f"Error applying OCR preprocessing for ROI {self.name}: {e}")
+            import traceback
+            traceback.print_exc() # Print full traceback for debugging
+            return roi_img # Return original on error
+
+
+    # --- Static Color Conversion Methods ---
     @staticmethod
     def rgb_to_hex(rgb_tuple):
         """Converts an (R, G, B) tuple to #RRGGBB hex string."""

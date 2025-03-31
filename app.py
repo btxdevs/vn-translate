@@ -1030,8 +1030,7 @@ class VisualNovelTranslatorApp:
             except Exception: pass # Ignore errors during error display
 
     def _process_rois(self, frame):
-        """Extracts text from ROIs, checks stability, and triggers translation."""
-        # No need to pass ocr_engine, use self.ocr_engine_type and self.ocr_lang
+        """Extracts text from ROIs, applies processing, checks stability, and triggers translation."""
         if frame is None or not self.ocr_engine_ready:
             # print("_process_rois skipped: No frame or OCR not ready.")
             return
@@ -1044,9 +1043,7 @@ class VisualNovelTranslatorApp:
             if roi.name == SNIP_ROI_NAME: continue # Skip the special snip ROI
 
             roi_img_original = roi.extract_roi(frame)
-            roi_img_processed = roi.apply_color_filter(roi_img_original) # Apply filter
-
-            if roi_img_processed is None or roi_img_processed.size == 0:
+            if roi_img_original is None:
                 extracted[roi.name] = ""
                 # Reset history and stability if ROI becomes invalid
                 if roi.name in self.text_history: del self.text_history[roi.name]
@@ -1055,9 +1052,23 @@ class VisualNovelTranslatorApp:
                     stable_changed = True
                 continue
 
+            # Apply color filter first
+            roi_img_color_filtered = roi.apply_color_filter(roi_img_original)
+            # Apply OCR preprocessing steps
+            roi_img_for_ocr = roi.apply_ocr_preprocessing(roi_img_color_filtered)
+
+            if roi_img_for_ocr is None or roi_img_for_ocr.size == 0:
+                extracted[roi.name] = ""
+                # Reset history and stability if processing fails
+                if roi.name in self.text_history: del self.text_history[roi.name]
+                if roi.name in new_stable:
+                    del new_stable[roi.name]
+                    stable_changed = True
+                continue
+
             try:
-                # Call the unified OCR function from utils.ocr
-                text = ocr.extract_text(roi_img_processed, lang=self.ocr_lang, engine_type=self.ocr_engine_type)
+                # Call the unified OCR function from utils.ocr with the fully processed image
+                text = ocr.extract_text(roi_img_for_ocr, lang=self.ocr_lang, engine_type=self.ocr_engine_type)
                 extracted[roi.name] = text
 
                 # --- Stability Check ---
@@ -1307,17 +1318,19 @@ class VisualNovelTranslatorApp:
             return
 
         # --- Create or Update ROI Object ---
+        # Create new ROI with default processing settings
         new_roi = ROI(roi_name, orig_x1, orig_y1, orig_x2, orig_y2)
 
         if overwrite_name:
             found = False
             for i, r in enumerate(self.rois):
                 if r.name == overwrite_name:
-                    # Preserve color filter settings when overwriting geometry
+                    # Preserve existing color filter AND preprocessing settings when overwriting geometry
                     new_roi.color_filter_enabled = r.color_filter_enabled
                     new_roi.target_color = r.target_color
                     new_roi.replacement_color = r.replacement_color
                     new_roi.color_threshold = r.color_threshold
+                    new_roi.preprocessing = r.preprocessing # Copy the whole dict
                     self.rois[i] = new_roi
                     found = True
                     break
@@ -1458,3 +1471,5 @@ class VisualNovelTranslatorApp:
             self.master.destroy()
         except tk.TclError: pass # Ignore errors if widgets already gone
         except Exception as e: print(f"Error during final window destruction: {e}")
+
+# --- END OF FILE app.py ---

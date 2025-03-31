@@ -6,7 +6,7 @@ from ui.base import BaseTab
 from utils.capture import capture_window
 from utils.config import save_rois
 from utils.settings import get_overlay_config_for_roi, update_settings, get_setting
-from utils.roi import ROI
+from utils.roi import ROI # Import ROI class
 from ui.overlay_tab import SNIP_ROI_NAME
 from ui.preview_window import PreviewWindow
 from ui.color_picker import ScreenColorPicker
@@ -15,8 +15,15 @@ import cv2
 
 class ROITab(BaseTab):
     def setup_ui(self):
-        # --- Main ROI definition and list ---
-        roi_frame = ttk.LabelFrame(self.frame, text="Regions of Interest (ROIs)", padding="10")
+        # --- Main Paned Window for this Tab ---
+        self.main_pane = ttk.PanedWindow(self.frame, orient=tk.VERTICAL)
+        self.main_pane.pack(fill=tk.BOTH, expand=True)
+
+        # --- Top Pane: ROI Definition and List ---
+        top_frame = ttk.Frame(self.main_pane, padding=0)
+        self.main_pane.add(top_frame, weight=1) # Adjust weight as needed
+
+        roi_frame = ttk.LabelFrame(top_frame, text="Regions of Interest (ROIs)", padding="10")
         roi_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
 
         create_frame = ttk.Frame(roi_frame)
@@ -34,7 +41,7 @@ class ROITab(BaseTab):
 
         list_frame = ttk.Frame(list_manage_frame)
         list_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
-        ttk.Label(list_frame, text="Current Game ROIs ([O]=Overlay, [C]=Color Filter):").pack(anchor=tk.W)
+        ttk.Label(list_frame, text="Current Game ROIs ([O]=Overlay, [C]=Color, [P]=Preproc):").pack(anchor=tk.W) # Updated label
         roi_scrollbar = ttk.Scrollbar(list_frame)
         roi_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.roi_listbox = tk.Listbox(list_frame, height=6, selectmode=tk.SINGLE, exportselection=False, yscrollcommand=roi_scrollbar.set)
@@ -53,96 +60,268 @@ class ROITab(BaseTab):
         self.config_overlay_btn = ttk.Button(manage_btn_frame, text="Overlay...", width=8, command=self.configure_selected_overlay, state=tk.DISABLED)
         self.config_overlay_btn.pack(pady=(5, 2), anchor=tk.N)
 
+        # --- Bottom Pane: Configuration Sections (Color Filter, Preprocessing) ---
+        bottom_frame = ttk.Frame(self.main_pane, padding=0)
+        self.main_pane.add(bottom_frame, weight=1) # Adjust weight as needed
+
         # --- Color Filter Configuration ---
-        self.color_filter_frame = ttk.LabelFrame(self.frame, text="Color Filtering (for selected ROI)", padding="10")
+        self.color_filter_frame = ttk.LabelFrame(bottom_frame, text="Color Filtering (for selected ROI)", padding="10")
         self.color_filter_frame.pack(fill=tk.X, pady=(5, 5))
         self.color_widgets = {}
+        self._build_color_filter_widgets() # Call helper to build
 
-        # Enable Checkbox
-        self.color_widgets['enabled_var'] = tk.BooleanVar(value=False)
-        self.color_widgets['enabled_check'] = ttk.Checkbutton(
-            self.color_filter_frame, text="Enable Color Filter", variable=self.color_widgets['enabled_var']
-        )
-        self.color_widgets['enabled_check'].grid(row=0, column=0, columnspan=4, sticky=tk.W, pady=(0, 5))
+        # --- OCR Preprocessing Configuration ---
+        self.preprocess_frame = ttk.LabelFrame(bottom_frame, text="OCR Preprocessing (for selected ROI)", padding="10")
+        self.preprocess_frame.pack(fill=tk.X, pady=(5, 5))
+        self.preprocess_widgets = {}
+        self._build_preprocessing_widgets() # Call helper to build
 
-        # Target Color
-        ttk.Label(self.color_filter_frame, text="Target Color:").grid(row=1, column=0, sticky=tk.W, padx=(0, 5), pady=2)
-        self.color_widgets['target_color_var'] = tk.StringVar(value="#FFFFFF")
-        self.color_widgets['target_color_label'] = ttk.Label(self.color_filter_frame, text="       ", background="#FFFFFF", relief=tk.SUNKEN, width=8)
-        self.color_widgets['target_color_label'].grid(row=1, column=1, sticky=tk.W, pady=2)
-        self.color_widgets['pick_target_btn'] = ttk.Button(self.color_filter_frame, text="Pick...", width=6, command=lambda: self.pick_color('target'))
-        self.color_widgets['pick_target_btn'].grid(row=1, column=2, padx=(5, 2), pady=2)
-        self.color_widgets['pick_screen_btn'] = ttk.Button(self.color_filter_frame, text="Screen", width=7, command=self.pick_color_from_screen)
-        self.color_widgets['pick_screen_btn'].grid(row=1, column=3, padx=(2, 0), pady=2)
+        # --- Apply & Preview Buttons (Combined) ---
+        # *** FIX: Create this frame directly in setup_ui, parented to bottom_frame ***
+        action_btn_frame = ttk.Frame(bottom_frame)
+        action_btn_frame.pack(fill=tk.X, pady=(10, 5), padx=5)
 
-        # Replacement Color (NEW)
-        ttk.Label(self.color_filter_frame, text="Replace With:").grid(row=2, column=0, sticky=tk.W, padx=(0, 5), pady=2)
-        default_replace_hex = ROI.rgb_to_hex(ROI.DEFAULT_REPLACEMENT_COLOR_RGB)
-        self.color_widgets['replace_color_var'] = tk.StringVar(value=default_replace_hex)
-        self.color_widgets['replace_color_label'] = ttk.Label(self.color_filter_frame, text="       ", background=default_replace_hex, relief=tk.SUNKEN, width=8)
-        self.color_widgets['replace_color_label'].grid(row=2, column=1, sticky=tk.W, pady=2)
-        self.color_widgets['pick_replace_btn'] = ttk.Button(self.color_filter_frame, text="Pick...", width=6, command=lambda: self.pick_color('replace'))
-        self.color_widgets['pick_replace_btn'].grid(row=2, column=2, padx=(5, 2), pady=2)
-        # No screen picker for replacement color for now, usually less critical
-
-        # Threshold
-        ttk.Label(self.color_filter_frame, text="Threshold:").grid(row=3, column=0, sticky=tk.W, padx=(0, 5), pady=2)
-        self.color_widgets['threshold_var'] = tk.IntVar(value=30)
-        self.color_widgets['threshold_scale'] = ttk.Scale(
-            self.color_filter_frame, from_=0, to=200, orient=tk.HORIZONTAL,
-            variable=self.color_widgets['threshold_var'], length=150,
-            command=lambda v: self.color_widgets['threshold_label_var'].set(f"{int(float(v))}")
-        )
-        self.color_widgets['threshold_scale'].grid(row=3, column=1, columnspan=2, sticky=tk.EW, pady=2)
-        self.color_widgets['threshold_label_var'] = tk.StringVar(value="30")
-        ttk.Label(self.color_filter_frame, textvariable=self.color_widgets['threshold_label_var'], width=4).grid(row=3, column=3, sticky=tk.W, padx=(5, 0), pady=2)
-
-        # Apply & Preview Buttons
-        color_btn_frame = ttk.Frame(self.color_filter_frame)
-        color_btn_frame.grid(row=4, column=0, columnspan=4, pady=(10, 0)) # Incremented row
-        self.color_widgets['apply_btn'] = ttk.Button(color_btn_frame, text="Apply Filter Settings", command=self.apply_color_filter_settings)
-        self.color_widgets['apply_btn'].pack(side=tk.LEFT, padx=5)
-        self.color_widgets['preview_orig_btn'] = ttk.Button(color_btn_frame, text="Preview Original", command=self.show_original_preview)
-        self.color_widgets['preview_orig_btn'].pack(side=tk.LEFT, padx=5)
-        self.color_widgets['preview_filter_btn'] = ttk.Button(color_btn_frame, text="Preview Filtered", command=self.show_filtered_preview)
-        self.color_widgets['preview_filter_btn'].pack(side=tk.LEFT, padx=5)
+        self.apply_settings_btn = ttk.Button(action_btn_frame, text="Apply All ROI Settings", command=self.apply_roi_settings)
+        self.apply_settings_btn.pack(side=tk.LEFT, padx=5)
+        self.preview_orig_btn = ttk.Button(action_btn_frame, text="Preview Original", command=self.show_original_preview)
+        self.preview_orig_btn.pack(side=tk.LEFT, padx=5)
+        self.preview_filter_btn = ttk.Button(action_btn_frame, text="Preview Processed", command=self.show_processed_preview)
+        self.preview_filter_btn.pack(side=tk.LEFT, padx=5)
+        # *** End FIX ***
 
         # --- Bottom part: Save All ROIs ---
-        file_btn_frame = ttk.Frame(self.frame)
+        file_btn_frame = ttk.Frame(bottom_frame)
         file_btn_frame.pack(fill=tk.X, pady=(5, 10))
         self.save_rois_btn = ttk.Button(file_btn_frame, text="Save All ROI Settings for Current Game", command=self.save_rois_for_current_game)
         self.save_rois_btn.pack(side=tk.LEFT, padx=5)
 
         # Initial state
         self.update_roi_list()
-        self.set_color_filter_widgets_state(tk.DISABLED)
+        self.set_config_widgets_state(tk.DISABLED) # Single function to disable both sections
 
-    def set_color_filter_widgets_state(self, state):
-        """Enable or disable all widgets in the color filter frame."""
-        if not hasattr(self, 'color_filter_frame') or not self.color_filter_frame.winfo_exists():
+    def _build_color_filter_widgets(self):
+        """Helper to create widgets for the color filter section."""
+        frame = self.color_filter_frame
+        widgets = self.color_widgets
+
+        # Enable Checkbox
+        widgets['enabled_var'] = tk.BooleanVar(value=False)
+        widgets['enabled_check'] = ttk.Checkbutton(
+            frame, text="Enable Color Filter", variable=widgets['enabled_var']
+        )
+        widgets['enabled_check'].grid(row=0, column=0, columnspan=4, sticky=tk.W, pady=(0, 5))
+
+        # Target Color
+        ttk.Label(frame, text="Target Color:").grid(row=1, column=0, sticky=tk.W, padx=(0, 5), pady=2)
+        widgets['target_color_var'] = tk.StringVar(value="#FFFFFF")
+        widgets['target_color_label'] = ttk.Label(frame, text="       ", background="#FFFFFF", relief=tk.SUNKEN, width=8)
+        widgets['target_color_label'].grid(row=1, column=1, sticky=tk.W, pady=2)
+        widgets['pick_target_btn'] = ttk.Button(frame, text="Pick...", width=6, command=lambda: self.pick_color('target'))
+        widgets['pick_target_btn'].grid(row=1, column=2, padx=(5, 2), pady=2)
+        widgets['pick_screen_btn'] = ttk.Button(frame, text="Screen", width=7, command=self.pick_color_from_screen)
+        widgets['pick_screen_btn'].grid(row=1, column=3, padx=(2, 0), pady=2)
+
+        # Replacement Color
+        ttk.Label(frame, text="Replace With:").grid(row=2, column=0, sticky=tk.W, padx=(0, 5), pady=2)
+        default_replace_hex = ROI.rgb_to_hex(ROI.DEFAULT_REPLACEMENT_COLOR_RGB)
+        widgets['replace_color_var'] = tk.StringVar(value=default_replace_hex)
+        widgets['replace_color_label'] = ttk.Label(frame, text="       ", background=default_replace_hex, relief=tk.SUNKEN, width=8)
+        widgets['replace_color_label'].grid(row=2, column=1, sticky=tk.W, pady=2)
+        widgets['pick_replace_btn'] = ttk.Button(frame, text="Pick...", width=6, command=lambda: self.pick_color('replace'))
+        widgets['pick_replace_btn'].grid(row=2, column=2, padx=(5, 2), pady=2)
+
+        # Threshold
+        ttk.Label(frame, text="Threshold:").grid(row=3, column=0, sticky=tk.W, padx=(0, 5), pady=2)
+        widgets['threshold_var'] = tk.IntVar(value=30)
+        widgets['threshold_scale'] = ttk.Scale(
+            frame, from_=0, to=200, orient=tk.HORIZONTAL,
+            variable=widgets['threshold_var'], length=150,
+            command=lambda v: widgets['threshold_label_var'].set(f"{int(float(v))}")
+        )
+        widgets['threshold_scale'].grid(row=3, column=1, columnspan=2, sticky=tk.EW, pady=2)
+        widgets['threshold_label_var'] = tk.StringVar(value="30")
+        ttk.Label(frame, textvariable=widgets['threshold_label_var'], width=4).grid(row=3, column=3, sticky=tk.W, padx=(5, 0), pady=2)
+
+    def _build_preprocessing_widgets(self):
+        """Helper to create widgets for the OCR preprocessing section."""
+        frame = self.preprocess_frame
+        widgets = self.preprocess_widgets
+        defaults = ROI.DEFAULT_PREPROCESSING
+
+        # --- Column Configuration ---
+        frame.columnconfigure(1, weight=0)
+        frame.columnconfigure(3, weight=1) # Give space to adaptive params
+        frame.columnconfigure(5, weight=1) # Give space to sharpen scale
+
+        row = 0
+
+        # --- Basic Operations ---
+        widgets['grayscale_var'] = tk.BooleanVar(value=defaults['grayscale'])
+        widgets['grayscale_check'] = ttk.Checkbutton(frame, text="Grayscale", variable=widgets['grayscale_var'])
+        widgets['grayscale_check'].grid(row=row, column=0, sticky=tk.W, padx=5, pady=2)
+        row += 1
+
+        # --- Sharpening (Slider) ---
+        ttk.Label(frame, text="Sharpen:").grid(row=row, column=0, sticky=tk.W, padx=5, pady=2)
+        widgets['sharpening_strength_var'] = tk.DoubleVar(value=defaults['sharpening_strength'])
+        # Use a local function for the command to update the label
+        def _update_sharpen_label(value):
+            try:
+                widgets['sharpening_strength_label_var'].set(f"{float(value):.2f}")
+            except (tk.TclError, ValueError): pass # Ignore errors if widget gone or value invalid
+
+        widgets['sharpening_strength_scale'] = ttk.Scale(
+            frame, from_=0.0, to=1.0, orient=tk.HORIZONTAL,
+            variable=widgets['sharpening_strength_var'], length=120,
+            command=_update_sharpen_label
+        )
+        widgets['sharpening_strength_scale'].grid(row=row, column=1, columnspan=3, sticky=tk.EW, padx=5, pady=2)
+        widgets['sharpening_strength_label_var'] = tk.StringVar(value=f"{defaults['sharpening_strength']:.2f}")
+        ttk.Label(frame, textvariable=widgets['sharpening_strength_label_var'], width=5).grid(row=row, column=4, sticky=tk.W, padx=(5, 0), pady=2)
+        row += 1
+
+
+        # --- Scaling ---
+        widgets['scaling_enabled_var'] = tk.BooleanVar(value=defaults['scaling_enabled'])
+        widgets['scaling_enabled_check'] = ttk.Checkbutton(frame, text="Scale", variable=widgets['scaling_enabled_var'])
+        widgets['scaling_enabled_check'].grid(row=row, column=0, sticky=tk.W, padx=5, pady=2)
+
+        widgets['scale_factor_var'] = tk.DoubleVar(value=defaults['scale_factor'])
+        widgets['scale_factor_spin'] = ttk.Spinbox(frame, from_=0.5, to=4.0, increment=0.1, width=5, textvariable=widgets['scale_factor_var'])
+        widgets['scale_factor_spin'].grid(row=row, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(frame, text="Factor").grid(row=row, column=2, sticky=tk.W, padx=(0,5), pady=2)
+        row += 1
+
+        # --- Binarization ---
+        ttk.Label(frame, text="Binarize:").grid(row=row, column=0, sticky=tk.W, padx=5, pady=2)
+        widgets['binarization_type_var'] = tk.StringVar(value=defaults['binarization_type'])
+        widgets['binarization_type_combo'] = ttk.Combobox(frame, textvariable=widgets['binarization_type_var'], values=ROI.BINARIZATION_TYPES, state="readonly", width=15)
+        widgets['binarization_type_combo'].grid(row=row, column=1, columnspan=2, sticky=tk.W, padx=5, pady=2)
+        widgets['binarization_type_combo'].bind("<<ComboboxSelected>>", self._on_binarization_type_change)
+        row += 1
+
+        # Adaptive Threshold Parameters (initially hidden/disabled)
+        widgets['adaptive_params_frame'] = ttk.Frame(frame)
+        widgets['adaptive_params_frame'].grid(row=row, column=0, columnspan=4, sticky=tk.EW, padx=5, pady=0)
+
+        ttk.Label(widgets['adaptive_params_frame'], text="Block Size:").grid(row=0, column=0, sticky=tk.W, padx=0, pady=1)
+        widgets['adaptive_block_size_var'] = tk.IntVar(value=defaults['adaptive_block_size'])
+        widgets['adaptive_block_size_spin'] = ttk.Spinbox(widgets['adaptive_params_frame'], from_=3, to=51, increment=2, width=5, textvariable=widgets['adaptive_block_size_var'])
+        widgets['adaptive_block_size_spin'].grid(row=0, column=1, sticky=tk.W, padx=5, pady=1)
+
+        ttk.Label(widgets['adaptive_params_frame'], text="C Value:").grid(row=0, column=2, sticky=tk.W, padx=5, pady=1)
+        widgets['adaptive_c_value_var'] = tk.IntVar(value=defaults['adaptive_c_value'])
+        widgets['adaptive_c_value_spin'] = ttk.Spinbox(widgets['adaptive_params_frame'], from_=-10, to=10, increment=1, width=5, textvariable=widgets['adaptive_c_value_var'])
+        widgets['adaptive_c_value_spin'].grid(row=0, column=3, sticky=tk.W, padx=5, pady=1)
+        row += 1 # Increment row after placing the adaptive frame
+
+        # --- Noise Reduction ---
+        widgets['median_blur_enabled_var'] = tk.BooleanVar(value=defaults['median_blur_enabled'])
+        widgets['median_blur_enabled_check'] = ttk.Checkbutton(frame, text="Median Blur", variable=widgets['median_blur_enabled_var'])
+        widgets['median_blur_enabled_check'].grid(row=row, column=0, sticky=tk.W, padx=5, pady=2)
+
+        widgets['median_blur_ksize_var'] = tk.IntVar(value=defaults['median_blur_ksize'])
+        widgets['median_blur_ksize_spin'] = ttk.Spinbox(frame, from_=3, to=15, increment=2, width=5, textvariable=widgets['median_blur_ksize_var'])
+        widgets['median_blur_ksize_spin'].grid(row=row, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(frame, text="KSize").grid(row=row, column=2, sticky=tk.W, padx=(0,5), pady=2)
+        row += 1
+
+        # --- Morphological Operations ---
+        widgets['dilation_enabled_var'] = tk.BooleanVar(value=defaults['dilation_enabled'])
+        widgets['dilation_enabled_check'] = ttk.Checkbutton(frame, text="Dilation", variable=widgets['dilation_enabled_var'])
+        widgets['dilation_enabled_check'].grid(row=row, column=0, sticky=tk.W, padx=5, pady=2)
+
+        widgets['erosion_enabled_var'] = tk.BooleanVar(value=defaults['erosion_enabled'])
+        widgets['erosion_enabled_check'] = ttk.Checkbutton(frame, text="Erosion", variable=widgets['erosion_enabled_var'])
+        widgets['erosion_enabled_check'].grid(row=row, column=1, sticky=tk.W, padx=5, pady=2)
+
+        widgets['morph_ksize_var'] = tk.IntVar(value=defaults['morph_ksize'])
+        widgets['morph_ksize_spin'] = ttk.Spinbox(frame, from_=1, to=15, increment=1, width=5, textvariable=widgets['morph_ksize_var'])
+        widgets['morph_ksize_spin'].grid(row=row, column=2, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(frame, text="KSize").grid(row=row, column=3, sticky=tk.W, padx=(0,5), pady=2)
+        row += 1
+
+        # Initial state for adaptive params
+        self._update_adaptive_param_state()
+
+    def _on_binarization_type_change(self, event=None):
+        """Callback when binarization type changes to enable/disable adaptive params."""
+        self._update_adaptive_param_state()
+
+    def _update_adaptive_param_state(self):
+        """Enable/disable adaptive threshold parameter widgets based on combobox selection."""
+        widgets = self.preprocess_widgets
+        # Check if widgets dict and the specific var exist
+        if not widgets or 'binarization_type_var' not in widgets:
             return
+        try:
+            is_adaptive = widgets['binarization_type_var'].get() == "Adaptive Gaussian"
+            new_state = tk.NORMAL if is_adaptive else tk.DISABLED
+
+            if widgets['adaptive_params_frame'].winfo_exists():
+                for child in widgets['adaptive_params_frame'].winfo_children():
+                    if isinstance(child, (ttk.Spinbox, ttk.Label)):
+                        child.configure(state=new_state)
+        except tk.TclError:
+            pass # Frame might not exist yet or is being destroyed
+        except AttributeError:
+            pass # Handle case where widgets['adaptive_params_frame'] might not be set yet
+
+    def set_config_widgets_state(self, state):
+        """Enable or disable all widgets in the config frames."""
         valid_states = (tk.NORMAL, tk.DISABLED)
         actual_state = state if state in valid_states else tk.DISABLED
         scale_state = tk.NORMAL if actual_state == tk.NORMAL else tk.DISABLED
+        combobox_state = 'readonly' if actual_state == tk.NORMAL else tk.DISABLED
+
+        frames_to_process = []
+        if hasattr(self, 'color_filter_frame') and self.color_filter_frame.winfo_exists():
+            frames_to_process.append(self.color_filter_frame)
+        if hasattr(self, 'preprocess_frame') and self.preprocess_frame.winfo_exists():
+            frames_to_process.append(self.preprocess_frame)
 
         try:
-            for widget in self.color_filter_frame.winfo_children():
-                widget_class = widget.winfo_class()
-                if isinstance(widget, (ttk.Frame, tk.Frame)):
-                    for sub_widget in widget.winfo_children():
-                        sub_widget_class = sub_widget.winfo_class()
+            for frame in frames_to_process:
+                for widget in frame.winfo_children():
+                    # Handle nested frames like adaptive_params_frame
+                    if isinstance(widget, (ttk.Frame, tk.Frame)):
+                        # Don't disable the frame itself, disable its children
+                        # Check if the widget is the adaptive params frame before iterating
+                        is_adaptive_frame = hasattr(self, 'preprocess_widgets') and widget == self.preprocess_widgets.get('adaptive_params_frame')
+                        if not is_adaptive_frame:
+                            for sub_widget in widget.winfo_children():
+                                try: sub_widget.configure(state=actual_state)
+                                except tk.TclError: pass
+                    else:
+                        widget_class = widget.winfo_class()
                         try:
-                            if sub_widget_class in ('TButton', 'TCheckbutton'):
-                                sub_widget.configure(state=actual_state)
+                            if widget_class in ('TButton', 'TCheckbutton', 'TSpinbox'):
+                                widget.configure(state=actual_state)
+                            elif widget_class == 'TCombobox':
+                                widget.configure(state=combobox_state)
+                            elif widget_class in ('Scale', 'TScale'): # Handle Scales
+                                widget.configure(state=scale_state)
+                            # Labels are usually kept enabled
                         except tk.TclError: pass
-                elif widget_class in ('TButton', 'TCheckbutton'):
-                    widget.configure(state=actual_state)
-                elif widget_class in ('Scale', 'TScale'):
-                    widget.configure(state=scale_state)
+
+            # Special handling for adaptive params based on binarization type
+            if state == tk.NORMAL:
+                self._update_adaptive_param_state()
+            else: # If disabling everything, disable adaptive params too
+                if hasattr(self, 'preprocess_widgets') and 'adaptive_params_frame' in self.preprocess_widgets and self.preprocess_widgets['adaptive_params_frame'].winfo_exists():
+                    for child in self.preprocess_widgets['adaptive_params_frame'].winfo_children():
+                        try: child.configure(state=tk.DISABLED)
+                        except tk.TclError: pass
+
+            # Enable/Disable Apply and Preview buttons based on overall state
+            if hasattr(self, 'apply_settings_btn'): self.apply_settings_btn.config(state=actual_state)
+            if hasattr(self, 'preview_orig_btn'): self.preview_orig_btn.config(state=actual_state)
+            if hasattr(self, 'preview_filter_btn'): self.preview_filter_btn.config(state=actual_state)
+
         except tk.TclError:
-            print("TclError setting color filter widget state (widgets might be closing).")
+            print("TclError setting config widget state (widgets might be closing).")
         except Exception as e:
-            print(f"Error setting color filter widget state: {e}")
+            print(f"Error setting config widget state: {e}")
 
 
     def on_roi_selected(self, event=None):
@@ -160,12 +339,12 @@ class ROITab(BaseTab):
         if has_selection:
             roi = self.get_selected_roi_object()
             if roi:
-                self.load_color_filter_settings(roi)
-                self.set_color_filter_widgets_state(tk.NORMAL)
+                self.load_roi_settings(roi) # Load both color and preprocess
+                self.set_config_widgets_state(tk.NORMAL)
             else:
-                self.set_color_filter_widgets_state(tk.DISABLED)
+                self.set_config_widgets_state(tk.DISABLED)
         else:
-            self.set_color_filter_widgets_state(tk.DISABLED)
+            self.set_config_widgets_state(tk.DISABLED)
 
     def get_selected_roi_object(self):
         """Gets the ROI object corresponding to the listbox selection."""
@@ -173,61 +352,154 @@ class ROITab(BaseTab):
         if not selection:
             return None
         try:
+            # Extract name robustly, handling potential multiple ']'
             listbox_text = self.roi_listbox.get(selection[0])
-            roi_name = listbox_text.split("]")[-1].strip()
+            parts = listbox_text.split("]")
+            roi_name = parts[-1].strip() # Get text after the last ']'
             return next((r for r in self.app.rois if r.name == roi_name), None)
-        except (tk.TclError, IndexError, StopIteration):
+        except (tk.TclError, IndexError, StopIteration, ValueError):
+            # Add listbox_text to the error message if it exists
+            error_text = f"Error getting selected ROI object from text: '{listbox_text}'" if 'listbox_text' in locals() else "Error getting selected ROI object"
+            print(error_text)
             return None
 
-    def load_color_filter_settings(self, roi):
-        """Loads the color filter settings from the ROI object into the UI."""
-        if not roi or not hasattr(self, 'color_widgets'):
-            return
+    def load_roi_settings(self, roi):
+        """Loads the settings (color filter + preprocessing) from the ROI object into the UI."""
+        if not roi: return
+        self._load_color_filter_settings(roi)
+        self._load_preprocessing_settings(roi)
+
+    def _load_color_filter_settings(self, roi):
+        """Loads only the color filter settings from the ROI object into the UI."""
+        if not hasattr(self, 'color_widgets'): return
+        widgets = self.color_widgets
         try:
-            self.color_widgets['enabled_var'].set(roi.color_filter_enabled)
-
+            widgets['enabled_var'].set(roi.color_filter_enabled)
             target_hex = ROI.rgb_to_hex(roi.target_color)
-            self.color_widgets['target_color_var'].set(target_hex)
-            self.color_widgets['target_color_label'].config(background=target_hex)
-
+            widgets['target_color_var'].set(target_hex)
+            widgets['target_color_label'].config(background=target_hex)
             replace_hex = ROI.rgb_to_hex(roi.replacement_color)
-            self.color_widgets['replace_color_var'].set(replace_hex)
-            self.color_widgets['replace_color_label'].config(background=replace_hex)
+            widgets['replace_color_var'].set(replace_hex)
+            widgets['replace_color_label'].config(background=replace_hex)
+            widgets['threshold_var'].set(roi.color_threshold)
+            widgets['threshold_label_var'].set(str(roi.color_threshold))
+        except tk.TclError: print("TclError loading color filter settings (widget might be destroyed).")
+        except Exception as e: print(f"Error loading color filter settings for {roi.name}: {e}")
 
-            self.color_widgets['threshold_var'].set(roi.color_threshold)
-            self.color_widgets['threshold_label_var'].set(str(roi.color_threshold))
-        except tk.TclError:
-            print("TclError loading color filter settings (widget might be destroyed).")
-        except Exception as e:
-            print(f"Error loading color filter settings for {roi.name}: {e}")
+    def _load_preprocessing_settings(self, roi):
+        """Loads only the preprocessing settings from the ROI object into the UI."""
+        if not hasattr(self, 'preprocess_widgets'): return
+        widgets = self.preprocess_widgets
+        settings = roi.preprocessing # Get the dict from the ROI object
+        defaults = ROI.DEFAULT_PREPROCESSING # Get defaults for fallback
+        try:
+            widgets['grayscale_var'].set(settings.get('grayscale', defaults['grayscale']))
+            widgets['binarization_type_var'].set(settings.get('binarization_type', defaults['binarization_type']))
+            widgets['adaptive_block_size_var'].set(settings.get('adaptive_block_size', defaults['adaptive_block_size']))
+            widgets['adaptive_c_value_var'].set(settings.get('adaptive_c_value', defaults['adaptive_c_value']))
+            widgets['scaling_enabled_var'].set(settings.get('scaling_enabled', defaults['scaling_enabled']))
+            widgets['scale_factor_var'].set(settings.get('scale_factor', defaults['scale_factor']))
+            # Load sharpening strength
+            sharpen_strength = settings.get('sharpening_strength', defaults['sharpening_strength'])
+            widgets['sharpening_strength_var'].set(sharpen_strength)
+            widgets['sharpening_strength_label_var'].set(f"{sharpen_strength:.2f}") # Update label too
 
-    def apply_color_filter_settings(self):
-        """Applies the UI settings to the selected in-memory ROI object."""
+            widgets['median_blur_enabled_var'].set(settings.get('median_blur_enabled', defaults['median_blur_enabled']))
+            widgets['median_blur_ksize_var'].set(settings.get('median_blur_ksize', defaults['median_blur_ksize']))
+            widgets['dilation_enabled_var'].set(settings.get('dilation_enabled', defaults['dilation_enabled']))
+            widgets['erosion_enabled_var'].set(settings.get('erosion_enabled', defaults['erosion_enabled']))
+            widgets['morph_ksize_var'].set(settings.get('morph_ksize', defaults['morph_ksize']))
+
+            # Update adaptive param visibility after loading
+            self._update_adaptive_param_state()
+        except tk.TclError: print("TclError loading preprocessing settings (widget might be destroyed).")
+        except Exception as e: print(f"Error loading preprocessing settings for {roi.name}: {e}")
+
+    def apply_roi_settings(self):
+        """Applies the UI settings (color + preprocess) to the selected in-memory ROI object."""
         roi = self.get_selected_roi_object()
         if not roi:
             messagebox.showwarning("Warning", "No ROI selected to apply settings to.", parent=self.app.master)
             return
 
         try:
+            # Apply Color Filter Settings
             roi.color_filter_enabled = self.color_widgets['enabled_var'].get()
-
-            target_hex = self.color_widgets['target_color_var'].get()
-            roi.target_color = ROI.hex_to_rgb(target_hex)
-
-            replace_hex = self.color_widgets['replace_color_var'].get()
-            roi.replacement_color = ROI.hex_to_rgb(replace_hex)
-
+            roi.target_color = ROI.hex_to_rgb(self.color_widgets['target_color_var'].get())
+            roi.replacement_color = ROI.hex_to_rgb(self.color_widgets['replace_color_var'].get())
             roi.color_threshold = self.color_widgets['threshold_var'].get()
+
+            # Apply Preprocessing Settings
+            new_preprocess_settings = {}
+            widgets = self.preprocess_widgets
+            defaults = ROI.DEFAULT_PREPROCESSING
+            for key in defaults:
+                var_name = f"{key}_var"
+                if var_name in widgets:
+                    try:
+                        # Get value, special handling for doublevar
+                        if isinstance(widgets[var_name], tk.DoubleVar):
+                            value = round(widgets[var_name].get(), 3) # Round float values
+                        else:
+                            value = widgets[var_name].get()
+                        new_preprocess_settings[key] = value
+                    except (tk.TclError, ValueError) as e:
+                        print(f"Warning: Could not read UI value for {key}, using default. Error: {e}")
+                        new_preprocess_settings[key] = defaults[key]
+                else:
+                    # Handle cases where widget name doesn't directly match key_var (e.g., binarization_type)
+                    if key == "binarization_type":
+                        new_preprocess_settings[key] = widgets['binarization_type_var'].get()
+                    else:
+                        print(f"Warning: UI variable for preprocessing key '{key}' not found.")
+                        new_preprocess_settings[key] = defaults[key]
+
+            # Validate specific numeric values
+            block_size = new_preprocess_settings.get('adaptive_block_size', defaults['adaptive_block_size'])
+            if block_size < 3 or block_size % 2 == 0:
+                messagebox.showwarning("Invalid Value", f"Adaptive Block Size ({block_size}) must be odd and >= 3. Using default.", parent=self.app.master)
+                new_preprocess_settings['adaptive_block_size'] = defaults['adaptive_block_size']
+                widgets['adaptive_block_size_var'].set(defaults['adaptive_block_size']) # Reset UI
+
+            median_ksize = new_preprocess_settings.get('median_blur_ksize', defaults['median_blur_ksize'])
+            if median_ksize < 3 or median_ksize % 2 == 0:
+                messagebox.showwarning("Invalid Value", f"Median Blur KSize ({median_ksize}) must be odd and >= 3. Using default.", parent=self.app.master)
+                new_preprocess_settings['median_blur_ksize'] = defaults['median_blur_ksize']
+                widgets['median_blur_ksize_var'].set(defaults['median_blur_ksize']) # Reset UI
+
+            morph_ksize = new_preprocess_settings.get('morph_ksize', defaults['morph_ksize'])
+            if morph_ksize < 1:
+                messagebox.showwarning("Invalid Value", f"Morph KSize ({morph_ksize}) must be >= 1. Using default.", parent=self.app.master)
+                new_preprocess_settings['morph_ksize'] = defaults['morph_ksize']
+                widgets['morph_ksize_var'].set(defaults['morph_ksize']) # Reset UI
+
+            scale_factor = new_preprocess_settings.get('scale_factor', defaults['scale_factor'])
+            if scale_factor <= 0:
+                messagebox.showwarning("Invalid Value", f"Scale Factor ({scale_factor}) must be > 0. Using default.", parent=self.app.master)
+                new_preprocess_settings['scale_factor'] = defaults['scale_factor']
+                widgets['scale_factor_var'].set(defaults['scale_factor']) # Reset UI
+
+            sharpen_strength = new_preprocess_settings.get('sharpening_strength', defaults['sharpening_strength'])
+            if not (0.0 <= sharpen_strength <= 1.0):
+                messagebox.showwarning("Invalid Value", f"Sharpen Strength ({sharpen_strength:.2f}) must be between 0.0 and 1.0. Clamping.", parent=self.app.master)
+                sharpen_strength = max(0.0, min(1.0, sharpen_strength))
+                new_preprocess_settings['sharpening_strength'] = sharpen_strength
+                widgets['sharpening_strength_var'].set(sharpen_strength) # Reset UI
+                widgets['sharpening_strength_label_var'].set(f"{sharpen_strength:.2f}") # Reset UI label
+
+
+            roi.preprocessing = new_preprocess_settings # Update the ROI's dict
 
             self.update_roi_list() # Update listbox display immediately
 
-            self.app.update_status(f"Color filter settings updated for '{roi.name}'. (Save ROIs to persist)")
-            print(f"Applied in-memory color settings for {roi.name}: enabled={roi.color_filter_enabled}, target={roi.target_color}, replace={roi.replacement_color}, thresh={roi.color_threshold}")
+            self.app.update_status(f"Settings updated for '{roi.name}'. (Save ROIs to persist)")
+            print(f"Applied in-memory settings for {roi.name}")
 
         except tk.TclError:
             messagebox.showerror("Error", "Could not read settings from UI (widgets might be destroyed).", parent=self.app.master)
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to apply color filter settings: {e}", parent=self.app.master)
+            messagebox.showerror("Error", f"Failed to apply ROI settings: {e}", parent=self.app.master)
+
 
     def pick_color(self, color_type):
         """Opens a color chooser dialog. color_type is 'target' or 'replace'."""
@@ -287,17 +559,13 @@ class ROITab(BaseTab):
 
     def show_original_preview(self):
         """Shows a preview of the original selected ROI content."""
-        self._show_preview(filtered=False)
+        self._show_preview(processed=False)
 
-    def show_filtered_preview(self):
-        """Shows a preview of the selected ROI after color filtering."""
-        roi = self.get_selected_roi_object()
-        if roi and not self.color_widgets['enabled_var'].get(): # Check UI state for preview
-            messagebox.showinfo("Info", "Color filtering is not currently enabled in UI.", parent=self.app.master)
-            return
-        self._show_preview(filtered=True)
+    def show_processed_preview(self):
+        """Shows a preview of the selected ROI after color filtering AND preprocessing."""
+        self._show_preview(processed=True)
 
-    def _show_preview(self, filtered=False):
+    def _show_preview(self, processed=False):
         """Helper function to generate and show ROI previews."""
         roi = self.get_selected_roi_object()
         if not roi:
@@ -322,39 +590,61 @@ class ROITab(BaseTab):
             messagebox.showerror("Error", "No frame available to generate preview.", parent=self.app.master)
             return
 
-        roi_img = roi.extract_roi(source_frame)
-        if roi_img is None:
+        roi_img_original = roi.extract_roi(source_frame)
+        if roi_img_original is None:
             messagebox.showerror("Error", f"Could not extract ROI '{roi.name}' from frame.", parent=self.app.master)
             return
 
-        preview_img = roi_img
+        preview_img = roi_img_original
         title_suffix = "Original"
-        if filtered:
+
+        if processed:
+            title_suffix = "Processed"
             # Apply the *current UI settings* for preview
             try:
                 # Create a temporary ROI instance with current UI settings
-                temp_roi = ROI("temp_preview", 0,0,1,1)
+                temp_roi = ROI("temp_preview", 0,0,1,1) # Dummy coords
+
+                # Apply color filter settings from UI
                 temp_roi.color_filter_enabled = self.color_widgets['enabled_var'].get()
                 temp_roi.target_color = ROI.hex_to_rgb(self.color_widgets['target_color_var'].get())
-                temp_roi.replacement_color = ROI.hex_to_rgb(self.color_widgets['replace_color_var'].get()) # Use UI replacement color
+                temp_roi.replacement_color = ROI.hex_to_rgb(self.color_widgets['replace_color_var'].get())
                 temp_roi.color_threshold = self.color_widgets['threshold_var'].get()
 
-                preview_img = temp_roi.apply_color_filter(roi_img.copy())
+                # Apply preprocessing settings from UI
+                temp_preprocess = {}
+                widgets = self.preprocess_widgets
+                defaults = ROI.DEFAULT_PREPROCESSING
+                for key in defaults:
+                    var_name = f"{key}_var"
+                    if var_name in widgets: temp_preprocess[key] = widgets[var_name].get()
+                    elif key == "binarization_type": temp_preprocess[key] = widgets['binarization_type_var'].get()
+                    else: temp_preprocess[key] = defaults[key]
+                temp_roi.preprocessing = temp_preprocess
+
+                # Apply processing steps
+                img_after_color = temp_roi.apply_color_filter(roi_img_original.copy())
+                preview_img = temp_roi.apply_ocr_preprocessing(img_after_color) # Apply preprocessing
+
                 if preview_img is None:
-                    messagebox.showerror("Error", "Failed to apply color filter for preview.", parent=self.app.master)
+                    messagebox.showerror("Error", "Failed to apply processing for preview.", parent=self.app.master)
                     return
 
-                target_hex = ROI.rgb_to_hex(temp_roi.target_color)
-                replace_hex = ROI.rgb_to_hex(temp_roi.replacement_color)
-                title_suffix = f"Filtered (Target:{target_hex}, Replace:{replace_hex}, Thresh:{temp_roi.color_threshold})"
-
             except Exception as e:
-                messagebox.showerror("Error", f"Error applying filter for preview: {e}", parent=self.app.master)
+                messagebox.showerror("Error", f"Error applying processing for preview: {e}", parent=self.app.master)
+                import traceback
+                traceback.print_exc()
                 return
 
+        # Convert final preview image for display (handle grayscale or color)
         try:
-            preview_img_rgb = cv2.cvtColor(preview_img, cv2.COLOR_BGR2RGB)
-        except cv2.error as e:
+            if len(preview_img.shape) == 2: # Grayscale
+                preview_img_rgb = cv2.cvtColor(preview_img, cv2.COLOR_GRAY2RGB)
+            elif len(preview_img.shape) == 3 and preview_img.shape[2] == 3: # BGR/RGB
+                preview_img_rgb = cv2.cvtColor(preview_img, cv2.COLOR_BGR2RGB)
+            else:
+                raise ValueError("Unsupported image format for preview")
+        except (cv2.error, ValueError) as e:
             messagebox.showerror("Preview Error", f"Failed to convert image for display: {e}", parent=self.app.master)
             return
 
@@ -362,8 +652,6 @@ class ROITab(BaseTab):
 
 
     # --- Other methods (on_roi_selection_toggled, update_roi_list, save_rois, move, delete, configure_overlay) ---
-    # These methods remain largely the same as in the previous version, but ensure update_roi_list
-    # correctly reflects the state after changes.
 
     def on_roi_selection_toggled(self, active):
         if active:
@@ -382,16 +670,26 @@ class ROITab(BaseTab):
         for roi in self.app.rois:
             if roi.name == SNIP_ROI_NAME: continue
 
+            # Overlay Status
             overlay_config = get_overlay_config_for_roi(roi.name)
-            is_overlay_enabled = overlay_config.get('enabled', True) # Assume True if not set
+            is_overlay_enabled = overlay_config.get('enabled', True)
             overlay_prefix = "[O]" if is_overlay_enabled else "[ ]"
 
+            # Color Filter Status
             color_prefix = "[C]" if roi.color_filter_enabled else "[ ]"
 
-            self.roi_listbox.insert(tk.END, f"{overlay_prefix}{color_prefix} {roi.name}")
+            # Preprocessing Status
+            # Check if any boolean flag is True OR binarization is not None OR sharpening > 0
+            preprocess_enabled = any(v for k, v in roi.preprocessing.items() if isinstance(v, bool) and v) \
+                                 or roi.preprocessing.get("binarization_type", "None") != "None" \
+                                 or roi.preprocessing.get("sharpening_strength", 0.0) > 0.0
+            preprocess_prefix = "[P]" if preprocess_enabled else "[ ]"
+
+            self.roi_listbox.insert(tk.END, f"{overlay_prefix}{color_prefix}{preprocess_prefix} {roi.name}")
 
         new_idx_to_select = -1
         if selected_text:
+            # Extract name robustly
             selected_name = selected_text.split("]")[-1].strip()
             all_names_in_listbox = [item.split("]")[-1].strip() for item in self.roi_listbox.get(0, tk.END)]
             try:
@@ -407,7 +705,7 @@ class ROITab(BaseTab):
         if hasattr(self.app, 'overlay_tab') and self.app.overlay_tab.frame.winfo_exists():
             self.app.overlay_tab.update_roi_list()
 
-        self.on_roi_selected() # Update button states and color filter UI
+        self.on_roi_selected() # Update button states and config UI
 
     def save_rois_for_current_game(self):
         if not self.app.selected_hwnd:
@@ -445,7 +743,9 @@ class ROITab(BaseTab):
         selection = self.roi_listbox.curselection()
         if not selection: return
         idx_in_listbox = selection[0]
-        if idx_in_listbox >= self.roi_listbox.size() - 1: return
+        # Need to count non-snip ROIs for correct index check
+        non_snip_rois_count = sum(1 for r in self.app.rois if r.name != SNIP_ROI_NAME)
+        if idx_in_listbox >= non_snip_rois_count - 1: return
 
         roi = self.get_selected_roi_object()
         if not roi: return
@@ -461,6 +761,7 @@ class ROITab(BaseTab):
             self.update_roi_list() # Rebuild and reselect
         except (ValueError, IndexError) as e:
             print(f"Error finding ROI for move down: {e}")
+
 
     def delete_selected_roi(self):
         roi = self.get_selected_roi_object()

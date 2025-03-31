@@ -54,8 +54,11 @@ class ROITab(BaseTab):
         self.move_up_btn.pack(pady=2, anchor=tk.N)
         self.move_down_btn = ttk.Button(manage_btn_frame, text="▼ Down", width=8, command=self.move_roi_down, state=tk.DISABLED)
         self.move_down_btn.pack(pady=2, anchor=tk.N)
+        # Add Redefine Button
+        self.redefine_roi_btn = ttk.Button(manage_btn_frame, text="Redefine", width=8, command=self.redefine_selected_roi, state=tk.DISABLED)
+        self.redefine_roi_btn.pack(pady=(10, 2), anchor=tk.N) # Place it above Delete
         self.delete_roi_btn = ttk.Button(manage_btn_frame, text="Delete", width=8, command=self.delete_selected_roi, state=tk.DISABLED)
-        self.delete_roi_btn.pack(pady=(10, 2), anchor=tk.N)
+        self.delete_roi_btn.pack(pady=2, anchor=tk.N) # Adjusted padding
         self.config_overlay_btn = ttk.Button(manage_btn_frame, text="Overlay...", width=8, command=self.configure_selected_overlay, state=tk.DISABLED)
         self.config_overlay_btn.pack(pady=(5, 2), anchor=tk.N)
 
@@ -170,7 +173,9 @@ class ROITab(BaseTab):
         # Use a local function for the command to update the label
         def _update_sharpen_label(value):
             try:
-                widgets['sharpening_strength_label_var'].set(f"{float(value):.2f}")
+                # Check if widget exists before accessing
+                if 'sharpening_strength_label_var' in widgets and widgets['sharpening_strength_label_var']:
+                    widgets['sharpening_strength_label_var'].set(f"{float(value):.2f}")
             except (tk.TclError, ValueError): pass # Ignore errors if widget gone or value invalid
 
         widgets['sharpening_strength_scale'] = ttk.Scale(
@@ -277,7 +282,7 @@ class ROITab(BaseTab):
             is_adaptive = widgets['binarization_type_var'].get() == "Adaptive Gaussian"
             new_state = tk.NORMAL if is_adaptive else tk.DISABLED
 
-            if widgets['adaptive_params_frame'].winfo_exists():
+            if 'adaptive_params_frame' in widgets and widgets['adaptive_params_frame'].winfo_exists():
                 for child in widgets['adaptive_params_frame'].winfo_children():
                     if isinstance(child, (ttk.Spinbox, ttk.Label)):
                         child.configure(state=new_state)
@@ -352,6 +357,8 @@ class ROITab(BaseTab):
         self.move_up_btn.config(state=tk.NORMAL if has_selection and idx > 0 else tk.DISABLED)
         self.move_down_btn.config(state=tk.NORMAL if has_selection and idx < num_items - 1 else tk.DISABLED)
         self.delete_roi_btn.config(state=tk.NORMAL if has_selection else tk.DISABLED)
+        # Enable Redefine button only if an ROI is selected
+        self.redefine_roi_btn.config(state=tk.NORMAL if has_selection else tk.DISABLED)
         can_config_overlay = has_selection and hasattr(self.app, 'overlay_tab') and self.app.overlay_tab.frame.winfo_exists()
         self.config_overlay_btn.config(state=tk.NORMAL if can_config_overlay else tk.DISABLED)
 
@@ -702,13 +709,19 @@ class ROITab(BaseTab):
     # --- Other methods (on_roi_selection_toggled, update_roi_list, save_rois, move, delete, configure_overlay) ---
 
     def on_roi_selection_toggled(self, active):
+        """Callback from App when ROI selection mode changes."""
         if active:
             self.create_roi_btn.config(text="Cancel Define")
-            self.app.update_status("ROI selection active. Drag on preview.")
+            # Update status based on whether we are redefining or creating new
+            if self.app.roi_to_redefine:
+                self.app.update_status(f"Redefining '{self.app.roi_to_redefine}'. Drag on preview.")
+            else:
+                self.app.update_status("ROI selection active. Drag on preview.")
             self.app.master.config(cursor="crosshair")
         else:
             self.create_roi_btn.config(text="Define ROI")
             self.app.master.config(cursor="")
+            # Status is updated by the app when cancelling or finishing
 
     def update_roi_list(self):
         current_selection_index = self.roi_listbox.curselection()
@@ -727,7 +740,7 @@ class ROITab(BaseTab):
             color_prefix = "[C]" if roi.color_filter_enabled else "[ ]"
 
             # Preprocessing Status (Basic check)
-            preprocess_enabled = any(v for k, v in roi.preprocessing.items() if isinstance(v, bool) and v and k not in ['cutout_enabled', 'invert_colors']) \
+            preprocess_enabled = any(v for k, v in roi.preprocessing.items() if isinstance(v, bool) and v and k not in ['cutout_enabled', 'invert_colors', 'grayscale', 'scaling_enabled']) \
                                  or roi.preprocessing.get("binarization_type", "None") != "None" \
                                  or roi.preprocessing.get("sharpening_strength", 0.0) > 0.0
             preprocess_prefix = "[P]" if preprocess_enabled else "[ ]"
@@ -850,6 +863,19 @@ class ROITab(BaseTab):
 
         self.update_roi_list()
         self.app.update_status(f"ROI '{roi.name}' deleted. (Save ROIs to persist)")
+
+    def redefine_selected_roi(self):
+        """Initiates the process to redefine the selected ROI's boundaries."""
+        roi = self.get_selected_roi_object()
+        if not roi:
+            messagebox.showwarning("Warning", "No ROI selected to redefine.", parent=self.app.master)
+            return
+
+        # Set the state in the app to indicate which ROI is being redefined
+        self.app.roi_to_redefine = roi.name
+
+        # Activate the ROI selection mode (this will also handle snapshotting)
+        self.app.toggle_roi_selection()
 
     def configure_selected_overlay(self):
         roi = self.get_selected_roi_object()

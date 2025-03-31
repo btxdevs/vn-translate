@@ -1,5 +1,3 @@
-# --- START OF FILE app.py ---
-
 import tkinter as tk
 from tkinter import ttk, messagebox
 import threading
@@ -63,6 +61,7 @@ class VisualNovelTranslatorApp:
         self.roi_draw_rect_id = None # Canvas item ID for the drawing rectangle
         self.scale_x, self.scale_y = 1.0, 1.0 # Scaling factor for display
         self.frame_display_coords = {'x': 0, 'y': 0, 'w': 0, 'h': 0} # Position/size on canvas
+        self.roi_to_redefine = None # Holds the name of the ROI being redefined
 
         # Snip & Translate state
         self.snip_mode_active = False
@@ -81,7 +80,7 @@ class VisualNovelTranslatorApp:
         self.last_status_message = ""
 
         # OCR Engine State
-        self.ocr_engine_type = get_setting("ocr_engine", "paddle") # Store the selected type
+        self.ocr_engine_type = get_setting("ocr_engine", "easyocr") # Store the selected type
         self.ocr_lang = get_setting("ocr_language", "jpn")
         self.ocr_engine_ready = False # Flag to track if the current engine is ready
         self._ocr_init_thread = None # Thread for background initialization
@@ -545,12 +544,13 @@ class VisualNovelTranslatorApp:
 
             # --- Activate ROI selection mode ---
             self.roi_selection_active = True
+            # Let the ROI tab update the status message based on redefine state
             if hasattr(self, "roi_tab"): self.roi_tab.on_roi_selection_toggled(True)
-            # Status updated in roi_tab
 
         else:
             # --- Deactivate ROI selection mode ---
             self.roi_selection_active = False
+            self.roi_to_redefine = None # Clear redefine state on cancel
             if hasattr(self, "roi_tab"): self.roi_tab.on_roi_selection_toggled(False)
             # Clean up drawing rectangle if it exists
             if self.roi_draw_rect_id:
@@ -1246,6 +1246,7 @@ class VisualNovelTranslatorApp:
             # If selection was active but failed, deactivate it
             if self.roi_selection_active:
                 self.roi_selection_active = False
+                self.roi_to_redefine = None # Clear redefine state
                 if hasattr(self, "roi_tab"): self.roi_tab.on_roi_selection_toggled(False)
                 if self.using_snapshot: self.return_to_live() # Exit snapshot if active
             return
@@ -1261,11 +1262,13 @@ class VisualNovelTranslatorApp:
         self.roi_draw_rect_id = None
         self.roi_start_coords = None
         self.roi_selection_active = False # Deactivate selection mode
+        # Keep roi_to_redefine until after processing below
         if hasattr(self, "roi_tab"): self.roi_tab.on_roi_selection_toggled(False)
 
         # Validate coordinates and size
         if coords is None or len(coords) != 4:
             print("ROI definition failed (invalid coords).")
+            self.roi_to_redefine = None # Clear redefine state
             if self.using_snapshot: self.return_to_live() # Exit snapshot
             return
 
@@ -1273,25 +1276,7 @@ class VisualNovelTranslatorApp:
         min_size = 5 # Minimum size in pixels on the canvas
         if abs(x2d - x1d) < min_size or abs(y2d - y1d) < min_size:
             messagebox.showwarning("ROI Too Small", f"Defined region too small (min {min_size}x{min_size} px required).", parent=self.master)
-            if self.using_snapshot: self.return_to_live() # Exit snapshot
-            return
-
-        # --- Get ROI Name ---
-        roi_name = self.roi_tab.roi_name_entry.get().strip()
-        overwrite_name = None
-        existing_names = {r.name for r in self.rois if r.name != SNIP_ROI_NAME}
-
-        if not roi_name: # Generate default name if empty
-            i = 1
-            roi_name = f"roi_{i}"
-            while roi_name in existing_names: i += 1; roi_name = f"roi_{i}"
-        elif roi_name in existing_names: # Check for overwrite
-            if not messagebox.askyesno("ROI Exists", f"An ROI named '{roi_name}' already exists. Overwrite it?", parent=self.master):
-                if self.using_snapshot: self.return_to_live() # Exit snapshot if user cancels
-                return
-            overwrite_name = roi_name
-        elif roi_name == SNIP_ROI_NAME: # Check for reserved name
-            messagebox.showerror("Invalid Name", f"Cannot use the reserved name '{SNIP_ROI_NAME}'. Please choose another.", parent=self.master)
+            self.roi_to_redefine = None # Clear redefine state
             if self.using_snapshot: self.return_to_live() # Exit snapshot
             return
 
@@ -1304,6 +1289,7 @@ class VisualNovelTranslatorApp:
         # Check for valid scaling factor
         if self.scale_x <= 0 or self.scale_y <= 0:
             print("Error: Invalid scaling factor during ROI creation.")
+            self.roi_to_redefine = None # Clear redefine state
             if self.using_snapshot: self.return_to_live() # Exit snapshot
             return
 
@@ -1314,56 +1300,105 @@ class VisualNovelTranslatorApp:
         # Final size check in original coordinates
         if abs(orig_x2 - orig_x1) < 1 or abs(orig_y2 - orig_y1) < 1:
             messagebox.showwarning("ROI Too Small", "Calculated ROI size is too small in original frame.", parent=self.master)
+            self.roi_to_redefine = None # Clear redefine state
             if self.using_snapshot: self.return_to_live() # Exit snapshot
             return
 
-        # --- Create or Update ROI Object ---
-        # Create new ROI with default processing settings
-        new_roi = ROI(roi_name, orig_x1, orig_y1, orig_x2, orig_y2)
-
-        if overwrite_name:
-            found = False
-            for i, r in enumerate(self.rois):
-                if r.name == overwrite_name:
-                    # Preserve existing color filter AND preprocessing settings when overwriting geometry
-                    new_roi.color_filter_enabled = r.color_filter_enabled
-                    new_roi.target_color = r.target_color
-                    new_roi.replacement_color = r.replacement_color
-                    new_roi.color_threshold = r.color_threshold
-                    new_roi.preprocessing = r.preprocessing # Copy the whole dict
-                    self.rois[i] = new_roi
-                    found = True
+        # --- Handle Redefine vs Create New ---
+        if self.roi_to_redefine:
+            # --- Redefining existing ROI ---
+            roi_name = self.roi_to_redefine
+            found_roi = None
+            for roi in self.rois:
+                if roi.name == roi_name:
+                    found_roi = roi
                     break
-            if not found: # Should not happen if overwrite_name was set
-                print(f"Warning: Tried to overwrite '{overwrite_name}' but not found.")
-                self.rois.append(new_roi) # Add as new if somehow not found
+
+            if found_roi:
+                # Update coordinates
+                found_roi.x1 = orig_x1
+                found_roi.y1 = orig_y1
+                found_roi.x2 = orig_x2
+                found_roi.y2 = orig_y2
+                print(f"Redefined ROI '{roi_name}' coordinates: ({orig_x1},{orig_y1})-({orig_x2},{orig_y2})")
+                self.update_status(f"ROI '{roi_name}' boundaries redefined. Remember to save.")
+                # Update UI
+                if hasattr(self, "roi_tab"): self.roi_tab.update_roi_list() # Update listbox
+                self._draw_rois() # Redraw ROIs on canvas
+                # Update overlay position/size if manager exists
+                if hasattr(self, "overlay_manager"):
+                    self.overlay_manager.reset_overlay_geometry(roi_name) # Reset geometry to match new ROI
+            else:
+                print(f"Error: Could not find ROI '{roi_name}' to redefine.")
+                self.update_status(f"Error redefining ROI '{roi_name}'.")
+
+            self.roi_to_redefine = None # Clear redefine state
+
         else:
-            # Add the new ROI to the list
-            self.rois.append(new_roi)
+            # --- Creating New ROI ---
+            roi_name = self.roi_tab.roi_name_entry.get().strip()
+            overwrite_name = None
+            existing_names = {r.name for r in self.rois if r.name != SNIP_ROI_NAME}
 
-        print(f"Created/Updated ROI: {new_roi.to_dict()}")
-
-        # --- Update UI and State ---
-        if hasattr(self, "roi_tab"): self.roi_tab.update_roi_list() # Update listbox
-        self._draw_rois() # Redraw ROIs on canvas
-        action = "created" if not overwrite_name else "updated"
-        self.update_status(f"ROI '{roi_name}' {action}. Remember to save ROI settings.")
-
-        # Suggest next ROI name in the entry box
-        if hasattr(self, "roi_tab"):
-            existing_names_now = {r.name for r in self.rois if r.name != SNIP_ROI_NAME}
-            next_name = "dialogue" if "dialogue" not in existing_names_now else ""
-            if not next_name: # Generate roi_N if dialogue exists
+            if not roi_name: # Generate default name if empty
                 i = 1
-                next_name = f"roi_{i}"
-                while next_name in existing_names_now: i += 1; next_name = f"roi_{i}"
-            self.roi_tab.roi_name_entry.delete(0, tk.END)
-            self.roi_tab.roi_name_entry.insert(0, next_name)
+                roi_name = f"roi_{i}"
+                while roi_name in existing_names: i += 1; roi_name = f"roi_{i}"
+            elif roi_name in existing_names: # Check for overwrite
+                if not messagebox.askyesno("ROI Exists", f"An ROI named '{roi_name}' already exists. Overwrite it?", parent=self.master):
+                    if self.using_snapshot: self.return_to_live() # Exit snapshot if user cancels
+                    return
+                overwrite_name = roi_name
+            elif roi_name == SNIP_ROI_NAME: # Check for reserved name
+                messagebox.showerror("Invalid Name", f"Cannot use the reserved name '{SNIP_ROI_NAME}'. Please choose another.", parent=self.master)
+                if self.using_snapshot: self.return_to_live() # Exit snapshot
+                return
 
-        # Create or update the corresponding overlay window in the manager
-        # The manager will handle visibility based on capture state
-        if hasattr(self, "overlay_manager"):
-            self.overlay_manager.create_overlay_for_roi(new_roi)
+            # Create or Update ROI Object
+            new_roi = ROI(roi_name, orig_x1, orig_y1, orig_x2, orig_y2)
+
+            if overwrite_name:
+                found = False
+                for i, r in enumerate(self.rois):
+                    if r.name == overwrite_name:
+                        # Preserve existing color filter AND preprocessing settings when overwriting geometry
+                        new_roi.color_filter_enabled = r.color_filter_enabled
+                        new_roi.target_color = r.target_color
+                        new_roi.replacement_color = r.replacement_color
+                        new_roi.color_threshold = r.color_threshold
+                        new_roi.preprocessing = r.preprocessing # Copy the whole dict
+                        self.rois[i] = new_roi
+                        found = True
+                        break
+                if not found: # Should not happen if overwrite_name was set
+                    print(f"Warning: Tried to overwrite '{overwrite_name}' but not found.")
+                    self.rois.append(new_roi) # Add as new if somehow not found
+            else:
+                # Add the new ROI to the list
+                self.rois.append(new_roi)
+
+            print(f"Created/Updated ROI: {new_roi.to_dict()}")
+
+            # Update UI and State
+            if hasattr(self, "roi_tab"): self.roi_tab.update_roi_list() # Update listbox
+            self._draw_rois() # Redraw ROIs on canvas
+            action = "created" if not overwrite_name else "updated"
+            self.update_status(f"ROI '{roi_name}' {action}. Remember to save ROI settings.")
+
+            # Suggest next ROI name in the entry box
+            if hasattr(self, "roi_tab"):
+                existing_names_now = {r.name for r in self.rois if r.name != SNIP_ROI_NAME}
+                next_name = "dialogue" if "dialogue" not in existing_names_now else ""
+                if not next_name: # Generate roi_N if dialogue exists
+                    i = 1
+                    next_name = f"roi_{i}"
+                    while next_name in existing_names_now: i += 1; next_name = f"roi_{i}"
+                self.roi_tab.roi_name_entry.delete(0, tk.END)
+                self.roi_tab.roi_name_entry.insert(0, next_name)
+
+            # Create or update the corresponding overlay window in the manager
+            if hasattr(self, "overlay_manager"):
+                self.overlay_manager.create_overlay_for_roi(new_roi)
 
         # Return to live view if we were in snapshot mode
         if self.using_snapshot: self.return_to_live()
@@ -1471,5 +1506,3 @@ class VisualNovelTranslatorApp:
             self.master.destroy()
         except tk.TclError: pass # Ignore errors if widgets already gone
         except Exception as e: print(f"Error during final window destruction: {e}")
-
-# --- END OF FILE app.py ---

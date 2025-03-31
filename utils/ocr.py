@@ -370,35 +370,3 @@ def extract_text(img, lang="jpn", engine_type="paddle"):
         import traceback
         traceback.print_exc()
         return f"[{engine_type.upper()} Runtime Error]"
-
-# Example Usage (Optional - for testing)
-if __name__ == '__main__':
-    # Create a dummy black image for testing initialization
-    dummy_image = np.zeros((100, 400, 3), dtype=np.uint8)
-    cv2.putText(dummy_image, "Test Text 123", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-
-    print("\n--- Testing PaddleOCR ---")
-    try:
-        text_paddle = extract_text(dummy_image, lang='eng', engine_type='paddle')
-        print(f"Paddle Result: '{text_paddle}'")
-    except Exception as e:
-        print(f"Paddle Test Error: {e}")
-
-    print("\n--- Testing EasyOCR ---")
-    try:
-        text_easyocr = extract_text(dummy_image, lang='eng', engine_type='easyocr')
-        print(f"EasyOCR Result: '{text_easyocr}'")
-    except Exception as e:
-        print(f"EasyOCR Test Error: {e}")
-
-    print("\n--- Testing Windows OCR ---")
-    if platform.system() == "Windows":
-        try:
-            text_windows = extract_text(dummy_image, lang='eng', engine_type='windows')
-            print(f"Windows OCR Result: '{text_windows}'")
-        except Exception as e:
-            print(f"Windows OCR Test Error: {e}")
-    else:
-        print("Skipping Windows OCR test (not on Windows).")
-
-# --- END OF FILE ocr.py ---
